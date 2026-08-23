@@ -1,0 +1,58 @@
+---
+# ---------------------------------------------------------------------------
+# Einstellungen für alle Gäste (LXC + VMs)
+# ---------------------------------------------------------------------------
+
+# --- Snapshots -------------------------------------------------------------
+# Vor dem Patchen automatisch einen Snapshot anlegen.
+pve_snapshot_enabled: true
+
+# Präfix für von Ansible verwaltete Snapshots. Nur Snapshots mit diesem
+# Präfix werden vom Prune-Task jemals gelöscht — manuelle Snapshots sind sicher.
+pve_snapshot_prefix: ansible
+
+# Wie viele Ansible-Snapshots pro Gast behalten werden (inkl. dem neuen).
+pve_snapshot_keep: 3
+
+# RAM-Zustand von laufenden VMs mit in den Snapshot aufnehmen.
+# false = deutlich schneller und platzsparender, Gast startet aus dem Snapshot
+# aber wie nach einem harten Reset.
+pve_snapshot_vmstate: false
+
+# --- Updates ---------------------------------------------------------------
+# "safe" = apt upgrade, "full"/"dist" = apt dist-upgrade (kann Pakete entfernen).
+guest_upgrade_type: safe
+
+# Pakete, die nie automatisch aktualisiert werden sollen (apt-mark hold).
+guest_hold_packages: []
+# Beispiel:
+# guest_hold_packages:
+#   - docker-ce
+#   - postgresql-16
+
+# --- Reboots ---------------------------------------------------------------
+# Darf dieser Host nach einem Update automatisch neu gestartet werden?
+maint_reboot_allowed: true
+
+# Timeout in Sekunden, wie lange auf die Rückkehr eines Hosts gewartet wird.
+maint_reboot_timeout: 600
+
+# LXC-Container über den PVE-Host neu starten (`pct reboot`) statt von innen.
+# Deutlich zuverlässiger als ein Reboot aus dem Container heraus.
+lxc_reboot_via_host: true
+
+# --- Cleanup ---------------------------------------------------------------
+# Journald auf diese Größe eindampfen.
+cleanup_journal_max_size: 200M
+# Journald-Einträge älter als dieser Zeitraum entfernen.
+cleanup_journal_max_age: 30d
+# Alte Kernel entfernen (nur VMs — LXC nutzt den Kernel des Hosts).
+cleanup_remove_old_kernels: true
+# `docker system prune` ausführen, falls Docker installiert ist.
+cleanup_docker_prune: false
+
+# --- Health ----------------------------------------------------------------
+# Ab diesem Füllstand (%) gilt ein Dateisystem als kritisch.
+health_disk_warn_percent: 85
+# Ab dieser RAM-Auslastung (%) wird gewarnt.
+health_memory_warn_percent: 90

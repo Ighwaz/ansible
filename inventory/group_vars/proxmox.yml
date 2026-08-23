@@ -1,0 +1,16 @@
+---
+# ---------------------------------------------------------------------------
+# Einstellungen für die PVE-Hosts selbst
+# ---------------------------------------------------------------------------
+
+# PVE-Hosts werden ohne Enterprise-Subscription meist über das no-subscription
+# Repo versorgt. `false` lässt die Repo-Konfiguration unangetastet.
+pve_manage_repos: false
+
+# Enterprise-Repo deaktivieren und no-subscription aktivieren.
+# Greift nur, wenn pve_manage_repos: true.
+pve_use_no_subscription_repo: true
+
+# Ein PVE-Host wird NIE automatisch neu gestartet — das würde alle Gäste
+# mitreißen. Reboots des Hypervisors bleiben bewusst manuell.
+maint_reboot_allowed: false

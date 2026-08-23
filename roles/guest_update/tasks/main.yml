@@ -1,0 +1,70 @@
+---
+# Paket-Updates für Debian/Ubuntu-Gäste inkl. Ermittlung, ob anschließend ein
+# Neustart nötig ist. Setzt den Fakt `guest_reboot_required`, den die Rolle
+# `guest_reboot` auswertet.
+
+- name: Unterstütztes Betriebssystem sicherstellen
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.os_family == 'Debian'
+    fail_msg: >-
+      {{ inventory_hostname }} läuft unter '{{ ansible_facts.os_family }}'.
+      Diese Rolle unterstützt nur Debian/Ubuntu.
+    quiet: true
+
+- name: Konfigurierte Pakete von Updates ausnehmen
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop: "{{ guest_hold_packages }}"
+  when: guest_hold_packages | length > 0
+
+- name: Paket-Index aktualisieren
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: "{{ guest_apt_cache_valid_time }}"
+    lock_timeout: "{{ guest_apt_lock_timeout }}"
+  register: guest_apt_cache
+  until: guest_apt_cache is succeeded
+  retries: 3
+  delay: 10
+
+- name: Ausstehende Updates ermitteln
+  ansible.builtin.command:
+    argv:
+      - apt-get
+      - --simulate
+      - "{{ 'dist-upgrade' if guest_upgrade_type in ['full', 'dist'] else 'upgrade' }}"
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  changed_when: false
+  check_mode: false
+  register: guest_pending_raw
+
+- name: Liste der ausstehenden Pakete aufbereiten
+  ansible.builtin.set_fact:
+    # apt-get --simulate gibt geplante Installationen als "Inst <paket> ..." aus.
+    guest_pending_packages: >-
+      {{ guest_pending_raw.stdout_lines
+         | select('match', '^Inst ')
+         | map('regex_replace', '^Inst (\S+).*$', '\1')
+         | list }}
+
+- name: Ausstehende Updates anzeigen
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: {{ guest_pending_packages | length }} Update(s)
+      {{ '-> ' ~ (guest_pending_packages | join(', ')) if guest_pending_packages | length > 0 else '' }}
+
+- name: Pakete aktualisieren
+  ansible.builtin.apt:
+    upgrade: "{{ 'dist' if guest_upgrade_type in ['full', 'dist'] else 'safe' }}"
+    autoremove: false
+    lock_timeout: "{{ guest_apt_lock_timeout }}"
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  register: guest_upgrade_result
+  when: guest_pending_packages | length > 0
+
+- name: Reboot-Bedarf ermitteln
+  ansible.builtin.include_tasks: reboot_required.yml

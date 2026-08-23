@@ -1,0 +1,11 @@
+---
+# Dateisysteme, die im Report nichts zu suchen haben.
+health_ignored_fstypes:
+  - tmpfs
+  - devtmpfs
+  - squashfs
+  - overlay
+  - iso9660
+  - fuse.lxcfs
+  - autofs
+  - nsfs

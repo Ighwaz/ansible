@@ -1,0 +1,25 @@
+---
+# Nur Updates (mit Snapshot davor und Neustart danach), ohne Aufräumen.
+#
+#   ansible-playbook playbooks/update.yml
+#   ansible-playbook playbooks/update.yml --limit vms -e guest_upgrade_type=full
+#   ansible-playbook playbooks/update.yml -e pve_snapshot_enabled=false
+
+- name: Gäste aktualisieren
+  hosts: guests
+  become: true
+  gather_facts: true
+  serial: "{{ maint_serial | default(1) }}"
+  max_fail_percentage: "{{ maint_max_fail_percentage | default(100) }}"
+
+  pre_tasks:
+    - name: Lauf-ID für Snapshot-Namen festlegen
+      ansible.builtin.set_fact:
+        maint_run_id: "{{ lookup('pipe', 'date -u +%Y%m%dT%H%M%S') }}"
+      run_once: true
+
+  roles:
+    - role: pve_facts
+    - role: pve_snapshot
+    - role: guest_update
+    - role: guest_reboot

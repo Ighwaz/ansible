@@ -1,0 +1,18 @@
+# Ansible Laufzeit-Artefakte
+*.retry
+.facts_cache/
+collections/
+reports/
+
+# Lokale Overrides / Secrets
+inventory/hosts.local.yml
+inventory/group_vars/*.local.yml
+inventory/host_vars/*.local.yml
+.vault_pass
+*.vault
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store

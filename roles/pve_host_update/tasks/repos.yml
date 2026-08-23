@@ -1,0 +1,88 @@
+---
+# Stellt die APT-Repositories eines PVE-Hosts ohne Subscription ein.
+#
+# Proxmox hat das Repo-Format zwischen den Major-Versionen gewechselt:
+#   PVE 8 (bookworm) nutzt klassische .list-Dateien
+#   PVE 9 (trixie)   nutzt deb822-.sources-Dateien
+# Beide Fälle werden anhand der tatsächlich vorhandenen Dateien behandelt,
+# nicht anhand einer geratenen Versionsnummer.
+
+- name: Vorhandene Repo-Dateien erfassen
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /etc/apt/sources.list.d/pve-enterprise.list
+    - /etc/apt/sources.list.d/pve-enterprise.sources
+    - /etc/apt/sources.list.d/ceph.list
+    - /etc/apt/sources.list.d/ceph.sources
+  register: pve_repo_files
+
+- name: Repo-Format bestimmen
+  ansible.builtin.set_fact:
+    # deb822, sobald eine .sources-Datei existiert.
+    pve_repo_style: >-
+      {{ 'deb822'
+         if (pve_repo_files.results
+             | selectattr('stat.exists')
+             | map(attribute='item')
+             | select('search', '\.sources$')
+             | list | length > 0)
+         else 'list' }}
+    pve_repo_present: >-
+      {{ pve_repo_files.results | selectattr('stat.exists') | map(attribute='item') | list }}
+
+- name: Enterprise-Repo deaktivieren (klassisches .list-Format)
+  ansible.builtin.replace:
+    path: "{{ item }}"
+    # Nur noch nicht auskommentierte deb-Zeilen anfassen.
+    regexp: '^(\s*deb\s+.*enterprise\.proxmox\.com.*)$'
+    replace: '# \1  # deaktiviert durch Ansible'
+    backup: true
+  loop: "{{ pve_repo_present | select('search', '\\.list$') | list }}"
+  when:
+    - pve_use_no_subscription_repo | bool
+    - "'ceph' not in item or pve_disable_ceph_enterprise_repo | bool"
+
+- name: Enterprise-Repo deaktivieren (deb822 .sources-Format)
+  # Die von Proxmox ausgelieferten Enterprise-Dateien enthalten genau eine
+  # Stanza, daher genügt hier ein einzelner Enabled-Schlüssel.
+  ansible.builtin.lineinfile:
+    path: "{{ item }}"
+    regexp: '^\s*Enabled:'
+    line: 'Enabled: false'
+    insertafter: EOF
+    backup: true
+  loop: "{{ pve_repo_present | select('search', '\\.sources$') | list }}"
+  when:
+    - pve_use_no_subscription_repo | bool
+    - "'ceph' not in item or pve_disable_ceph_enterprise_repo | bool"
+
+- name: No-Subscription-Repo einrichten (klassisches .list-Format)
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/pve-no-subscription.list
+    content: |
+      # Von Ansible verwaltet — manuelle Änderungen werden überschrieben.
+      deb http://download.proxmox.com/debian/pve {{ ansible_facts.distribution_release }} pve-no-subscription
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - pve_use_no_subscription_repo | bool
+    - pve_repo_style == 'list'
+
+- name: No-Subscription-Repo einrichten (deb822 .sources-Format)
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/pve-no-subscription.sources
+    content: |
+      # Von Ansible verwaltet — manuelle Änderungen werden überschrieben.
+      Types: deb
+      URIs: http://download.proxmox.com/debian/pve
+      Suites: {{ ansible_facts.distribution_release }}
+      Components: pve-no-subscription
+      Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
+    owner: root
+    group: root
+    mode: "0644"
+  when:
+    - pve_use_no_subscription_repo | bool
+    - pve_repo_style == 'deb822'

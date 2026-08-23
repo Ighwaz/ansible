@@ -1,0 +1,15 @@
+---
+# Schwellwerte, ab denen ein Wert im Report als Warnung markiert wird.
+health_disk_warn_percent: 85
+health_memory_warn_percent: 90
+health_swap_warn_percent: 50
+
+# Paket-Index vor dem Zählen ausstehender Updates aktualisieren.
+# Ohne das ist die Zahl nur so aktuell wie der letzte apt update.
+health_update_cache: true
+
+# Verzeichnis auf dem Controller, in das der Report geschrieben wird.
+maint_report_dir: "{{ playbook_dir }}/../reports"
+
+# Report zusätzlich als Datei ablegen (sonst nur Ausgabe im Terminal).
+health_write_report: true

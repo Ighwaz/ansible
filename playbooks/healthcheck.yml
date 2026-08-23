@@ -1,0 +1,40 @@
+---
+# Rein lesende Bestandsaufnahme aller Gäste. Ändert nichts und erzeugt einen
+# Markdown-Report unter reports/.
+#
+#   ansible-playbook playbooks/healthcheck.yml
+#   ansible-playbook playbooks/healthcheck.yml --limit lxc
+
+- name: Gesundheitszustand der Gäste erfassen
+  hosts: guests
+  become: true
+  gather_facts: false
+  # Read-only: alle Hosts dürfen parallel laufen.
+  max_fail_percentage: "{{ maint_max_fail_percentage | default(100) }}"
+
+  pre_tasks:
+    - name: Lauf-ID für den Report festlegen
+      ansible.builtin.set_fact:
+        maint_run_id: "{{ lookup('pipe', 'date -u +%Y%m%dT%H%M%S') }}"
+      run_once: true
+
+  tasks:
+    - name: Proxmox-Zuordnung ermitteln
+      ansible.builtin.include_role:
+        name: pve_facts
+      # Der Health-Check funktioniert auch ohne Zugriff auf einen PVE-Host,
+      # dann fehlen im Report lediglich vmid und Node.
+      when: groups['proxmox'] | default([]) | length > 0
+
+    - name: Kennzahlen erheben
+      ansible.builtin.include_role:
+        name: guest_health
+
+    - name: Report schreiben
+      ansible.builtin.include_role:
+        name: guest_health
+        tasks_from: report.yml
+      # Der Report fasst alle Hosts zusammen und wird daher genau einmal
+      # erzeugt, nicht je Host.
+      run_once: true
+      when: health_write_report | default(true) | bool

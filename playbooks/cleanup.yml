@@ -1,0 +1,16 @@
+---
+# Nur Housekeeping: Paketreste, APT-Cache, Journal, optional Docker.
+# Spielt keine Updates ein und startet nichts neu.
+#
+#   ansible-playbook playbooks/cleanup.yml
+#   ansible-playbook playbooks/cleanup.yml -e cleanup_docker_prune=true --limit ct-docker
+
+- name: Gäste aufräumen
+  hosts: guests
+  become: true
+  gather_facts: true
+  # Kein `serial`: Aufräumen ist unkritisch und darf auf allen Hosts parallel laufen.
+  max_fail_percentage: "{{ maint_max_fail_percentage | default(100) }}"
+
+  roles:
+    - role: guest_cleanup

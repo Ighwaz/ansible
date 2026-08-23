@@ -1,0 +1,61 @@
+---
+# Ermittelt über mehrere unabhängige Signale, ob ein Neustart nötig ist.
+# Ein einzelnes Signal genügt nicht: /var/run/reboot-required existiert unter
+# Debian nur mit installiertem update-notifier-common, und Kernel-Updates sind
+# in LXC-Containern irrelevant, weil dort der Kernel des Hosts läuft.
+
+- name: Marker /var/run/reboot-required prüfen
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: guest_reboot_marker
+
+- name: Laufenden und installierten Kernel vergleichen (nur VMs)
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's|.*/vmlinuz-||' | sort -V | tail -n1
+    executable: /bin/bash
+  # LXC-Container nutzen den Kernel des PVE-Hosts — ein Kernel-Vergleich im
+  # Container wäre bedeutungslos.
+  when: pve_type | default('qemu') != 'lxc'
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  register: guest_newest_kernel
+
+- name: needrestart auswerten, falls vorhanden
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      command -v needrestart >/dev/null 2>&1 || { echo "NEEDRESTART-KSTA: 0"; exit 0; }
+      needrestart -b 2>/dev/null || true
+    executable: /bin/bash
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  register: guest_needrestart
+
+- name: Reboot-Bedarf zusammenfassen
+  ansible.builtin.set_fact:
+    guest_reboot_reasons: >-
+      {{ ( ['Marker /var/run/reboot-required vorhanden']
+            if guest_reboot_marker.stat.exists else [] )
+         + ( ['Kernel-Update: laufend ' ~ ansible_facts.kernel ~ ', installiert '
+              ~ (guest_newest_kernel.stdout | default('') | trim)]
+            if (pve_type | default('qemu') != 'lxc'
+                and (guest_newest_kernel.stdout | default('') | trim) | length > 0
+                and (guest_newest_kernel.stdout | trim) != ansible_facts.kernel) else [] )
+         + ( ['needrestart meldet einen ausstehenden Kernel-Neustart']
+            if (guest_needrestart.stdout | default(''))
+               is search('NEEDRESTART-KSTA:\s*[23]') else [] ) }}
+
+- name: Reboot-Flag setzen
+  ansible.builtin.set_fact:
+    guest_reboot_required: "{{ guest_reboot_reasons | length > 0 }}"
+
+- name: Reboot-Bedarf anzeigen
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: Neustart erforderlich —
+      {{ guest_reboot_reasons | join('; ') }}
+  when: guest_reboot_required | bool

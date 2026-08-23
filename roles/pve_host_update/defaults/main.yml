@@ -1,0 +1,17 @@
+---
+# Repository-Konfiguration des PVE-Hosts durch Ansible verwalten lassen.
+# Standardmäßig aus: bestehende Repo-Setups werden nicht angefasst.
+pve_manage_repos: false
+
+# Enterprise-Repo deaktivieren und stattdessen pve-no-subscription aktivieren.
+# Nur wirksam bei pve_manage_repos: true.
+pve_use_no_subscription_repo: true
+
+# Ceph-Enterprise-Repo mit deaktivieren, falls vorhanden.
+pve_disable_ceph_enterprise_repo: true
+
+# Ein PVE-Host wird nie automatisch neu gestartet — das würde sämtliche Gäste
+# mitreißen. Bei Kernel-Updates wird nur gemeldet, dass ein Reboot ansteht.
+maint_reboot_allowed: false
+
+guest_apt_lock_timeout: 300

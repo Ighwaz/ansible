@@ -1,0 +1,43 @@
+---
+# Vollständige Wartung der Gäste:
+#   Snapshot -> Updates -> Neustart (falls nötig) -> Aufräumen
+#
+#   ansible-playbook playbooks/maintenance.yml
+#   ansible-playbook playbooks/maintenance.yml --limit lxc
+#   ansible-playbook playbooks/maintenance.yml --limit ct-docker --check
+
+- name: Proxmox-Gäste warten
+  hosts: guests
+  become: true
+  gather_facts: true
+
+  # Nacheinander statt alles auf einmal: fällt ein Dienst beim Neustart aus,
+  # betrifft das immer nur einen Host.
+  serial: "{{ maint_serial | default(1) }}"
+
+  # Ohne das würde bei `serial: 1` ein einziger fehlgeschlagener Host das
+  # gesamte Play beenden — die Charge wäre zu 100 % gescheitert. Ein defekter
+  # Gast darf die Wartung aller übrigen nicht verhindern.
+  max_fail_percentage: "{{ maint_max_fail_percentage | default(100) }}"
+
+  pre_tasks:
+    - name: Lauf-ID für Snapshot-Namen festlegen
+      ansible.builtin.set_fact:
+        maint_run_id: "{{ lookup('pipe', 'date -u +%Y%m%dT%H%M%S') }}"
+      run_once: true
+
+  roles:
+    - role: pve_facts
+    - role: pve_snapshot
+    - role: guest_update
+    - role: guest_reboot
+    - role: guest_cleanup
+
+  post_tasks:
+    - name: Wartung abgeschlossen
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} fertig —
+          {{ (guest_pending_packages | default([]) | length) }} Update(s) eingespielt,
+          Neustart: {{ 'ja' if (guest_reboot_required | default(false) | bool
+                               and maint_reboot_allowed | default(true) | bool) else 'nein' }}.

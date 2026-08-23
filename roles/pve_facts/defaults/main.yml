@@ -1,0 +1,4 @@
+---
+# Über welchen PVE-Host die Cluster-Abfrage läuft. Bei einem Cluster liefert
+# jeder Knoten dieselbe Sicht, daher genügt der erste aus der Gruppe.
+pve_delegate_host: "{{ groups['proxmox'] | default([]) | first | default('') }}"

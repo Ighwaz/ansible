@@ -1,0 +1,157 @@
+---
+# Rein lesende Bestandsaufnahme. Verändert nichts am System und ist damit auch
+# gefahrlos gegen Produktivsysteme und im --check-Modus einsetzbar.
+
+- name: Vollständige Fakten einlesen
+  ansible.builtin.setup:
+
+- name: Paket-Index aktualisieren
+  ansible.builtin.command:
+    argv: [apt-get, update, -qq]
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  when: health_update_cache | bool
+
+- name: Ausstehende Updates ermitteln
+  ansible.builtin.command:
+    argv: [apt-get, --simulate, upgrade]
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  register: health_pending_raw
+
+- name: Sicherheitsrelevante Updates zählen
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      apt-get --simulate upgrade 2>/dev/null | grep -c -iE '^Inst .*security' || true
+    executable: /bin/bash
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  register: health_security_raw
+
+- name: Reboot-Marker prüfen
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: health_reboot_marker
+
+- name: Fehlgeschlagene systemd-Units ermitteln
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      command -v systemctl >/dev/null 2>&1 || exit 0
+      systemctl list-units --state=failed --no-legend --plain 2>/dev/null | awk '{print $1}'
+    executable: /bin/bash
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  register: health_failed_units
+
+# --- Dateisysteme ----------------------------------------------------------
+# Pseudo-Dateisysteme und Mounts ohne Größenangabe fliegen raus; für den Rest
+# wird die Belegung in Prozent ergänzt.
+
+- name: Relevante Dateisysteme auswählen
+  ansible.builtin.set_fact:
+    health_mounts_raw: >-
+      {{ ansible_facts.mounts | default([])
+         | rejectattr('fstype', 'in', health_ignored_fstypes)
+         | selectattr('size_total', 'defined')
+         | selectattr('size_total', 'gt', 0)
+         | list }}
+
+- name: Belegung je Dateisystem berechnen
+  ansible.builtin.set_fact:
+    health_filesystems: >-
+      {{ health_filesystems | default([]) + [{
+           'mount': item.mount,
+           'fstype': item.fstype,
+           'size_gb': ((item.size_total | float) / 1073741824) | round(1),
+           'free_gb': ((item.size_available | float) / 1073741824) | round(1),
+           'used_pct': (((item.size_total | float) - (item.size_available | float))
+                        / (item.size_total | float) * 100) | round(1),
+         }] }}
+  loop: "{{ health_mounts_raw }}"
+  loop_control:
+    label: "{{ item.mount }}"
+
+- name: Leere Dateisystemliste absichern
+  ansible.builtin.set_fact:
+    health_filesystems: "{{ health_filesystems | default([]) }}"
+
+# --- Kennzahlen ------------------------------------------------------------
+
+- name: Kennzahlen zusammenstellen
+  ansible.builtin.set_fact:
+    health:
+      hostname: "{{ ansible_facts.fqdn | default(inventory_hostname) }}"
+      os: "{{ ansible_facts.distribution | default('?') }} {{ ansible_facts.distribution_version | default('') }}"
+      kernel: "{{ ansible_facts.kernel | default('?') }}"
+      uptime_days: "{{ ((ansible_facts.uptime_seconds | default(0) | int) / 86400) | round(1) }}"
+      pve_type: "{{ pve_type | default('n/a') }}"
+      pve_vmid: "{{ pve_vmid | default('n/a') }}"
+      pve_node: "{{ pve_node | default('n/a') }}"
+      cpus: "{{ ansible_facts.processor_vcpus | default(ansible_facts.processor_cores | default(1)) }}"
+      load1: "{{ ansible_facts.loadavg['1m'] | default(0) | round(2) }}"
+      mem_total_mb: "{{ ansible_facts.memtotal_mb | default(0) }}"
+      mem_used_pct: "{{ health_mem_used_pct }}"
+      swap_used_pct: "{{ health_swap_used_pct }}"
+      pending_updates: "{{ health_pending_raw.stdout_lines | default([]) | select('match', '^Inst ') | list | length }}"
+      security_updates: "{{ health_security_raw.stdout | default('0') | trim | int }}"
+      reboot_required: "{{ health_reboot_marker.stat.exists }}"
+      failed_units: "{{ health_failed_units.stdout_lines | default([]) | select | list }}"
+      filesystems: "{{ health_filesystems }}"
+  vars:
+    health_mem_used_pct: >-
+      {{ 0 if (ansible_facts.memtotal_mb | default(0) | int) == 0
+         else ((ansible_facts.memory_mb.nocache.used | default(0) | float)
+               / (ansible_facts.memtotal_mb | float) * 100) | round(1) }}
+    health_swap_used_pct: >-
+      {{ 0 if (ansible_facts.swaptotal_mb | default(0) | int) == 0
+         else (((ansible_facts.swaptotal_mb | int) - (ansible_facts.swapfree_mb | default(0) | int))
+               / (ansible_facts.swaptotal_mb | float) * 100) | round(1) }}
+
+# --- Auffälligkeiten -------------------------------------------------------
+
+- name: Volllaufende Dateisysteme sammeln
+  ansible.builtin.set_fact:
+    health_disk_warnings: >-
+      {{ health_disk_warnings | default([])
+         + ['Dateisystem ' ~ item.mount ~ ' zu ' ~ item.used_pct ~ ' % belegt ('
+            ~ item.free_gb ~ ' GB frei)'] }}
+  loop: "{{ health.filesystems | selectattr('used_pct', 'ge', health_disk_warn_percent | float) | list }}"
+  loop_control:
+    label: "{{ item.mount }}"
+
+- name: Auffälligkeiten dieses Hosts zusammenfassen
+  ansible.builtin.set_fact:
+    health_warnings: "{{ (health_disk_warnings | default([])) + health_other_warnings }}"
+  vars:
+    health_other_warnings: >-
+      {{ (['Neustart ausstehend'] if health.reboot_required | bool else [])
+         + (['RAM-Auslastung ' ~ health.mem_used_pct ~ ' %']
+            if (health.mem_used_pct | float) >= (health_memory_warn_percent | float) else [])
+         + (['Swap-Auslastung ' ~ health.swap_used_pct ~ ' %']
+            if (health.swap_used_pct | float) >= (health_swap_warn_percent | float) else [])
+         + ([(health.failed_units | length) ~ ' fehlgeschlagene systemd-Unit(s): '
+             ~ (health.failed_units | join(', '))]
+            if health.failed_units | length > 0 else [])
+         + ([health.security_updates ~ ' sicherheitsrelevante(s) Update(s) ausstehend']
+            if health.security_updates | int > 0 else []) }}
+
+- name: Kurzfassung im Terminal ausgeben
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }} [{{ health.pve_type }}/{{ health.pve_vmid }}] —
+      {{ health.os }}, Uptime {{ health.uptime_days }} d,
+      RAM {{ health.mem_used_pct }} %,
+      Updates {{ health.pending_updates }} ({{ health.security_updates }} Security)
+      {{ '| ' ~ (health_warnings | join(' | ')) if health_warnings | length > 0 else '| ok' }}

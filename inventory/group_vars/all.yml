@@ -1,0 +1,18 @@
+---
+# ---------------------------------------------------------------------------
+# Globale Einstellungen für alle Hosts
+# ---------------------------------------------------------------------------
+
+ansible_user: ansible
+ansible_python_interpreter: /usr/bin/python3
+
+# Wie viele Hosts gleichzeitig gewartet werden. 1 = streng nacheinander.
+# Überschreibbar per: -e maint_serial=4
+maint_serial: 1
+
+# Zentrale Zeitmarke für einen Wartungslauf (Snapshot-Namen, Report-Dateien).
+# Wird einmal beim Play-Start gesetzt und ist für alle Hosts identisch.
+maint_run_id: "{{ ansible_date_time.iso8601_basic_short | default(lookup('pipe', 'date -u +%Y%m%dT%H%M%S')) }}"
+
+# Verzeichnis auf dem Controller für Health-Reports.
+maint_report_dir: "{{ playbook_dir }}/../reports"

@@ -1,0 +1,65 @@
+---
+# Legt vor dem Patchen einen Snapshot des Gastes auf dem PVE-Host an und
+# räumt anschließend alte, von Ansible erzeugte Snapshots auf.
+#
+# Erwartet die Fakten aus der Rolle `pve_facts` (pve_vmid, pve_node, pve_type,
+# pve_cli, pve_owner_host).
+
+- name: Snapshot-Block
+  when: pve_snapshot_enabled | bool
+  block:
+
+    - name: Proxmox-Fakten sind vorhanden
+      ansible.builtin.assert:
+        that:
+          - pve_vmid is defined
+          - pve_node is defined
+          - pve_cli is defined
+        fail_msg: >-
+          Proxmox-Fakten fehlen. Die Rolle `pve_facts` muss vor `pve_snapshot`
+          ausgeführt werden.
+        quiet: true
+
+    - name: Snapshot-Namen festlegen
+      ansible.builtin.set_fact:
+        pve_snapshot_name: "{{ pve_snapshot_prefix }}-{{ maint_run_id }}"
+
+    - name: Snapshot anlegen
+      ansible.builtin.command:
+        argv: >-
+          {{ [pve_cli, 'snapshot', pve_vmid | string, pve_snapshot_name,
+              '--description', pve_snapshot_description]
+             + (['--vmstate', '1']
+                if (pve_type == 'qemu' and pve_status == 'running'
+                    and pve_snapshot_vmstate | bool)
+                else []) }}
+      delegate_to: "{{ pve_owner_host }}"
+      register: pve_snapshot_result
+      changed_when: pve_snapshot_result.rc == 0
+      failed_when: false
+
+    - name: Ergebnis des Snapshots auswerten
+      ansible.builtin.fail:
+        msg: >-
+          Snapshot '{{ pve_snapshot_name }}' für {{ pve_type }}/{{ pve_vmid }}
+          ist fehlgeschlagen (rc={{ pve_snapshot_result.rc }}):
+          {{ pve_snapshot_result.stderr | default('') | trim }}
+          — Wartung für {{ inventory_hostname }} wird abgebrochen. Häufigste
+          Ursache: das Storage des Gastes unterstützt keine Snapshots
+          (z. B. Verzeichnis-Storage mit raw-Images).
+      when:
+        - pve_snapshot_result.rc != 0
+        - pve_snapshot_fail_on_error | bool
+
+    - name: Fehlgeschlagenen Snapshot nur melden
+      ansible.builtin.debug:
+        msg: >-
+          WARNUNG: Snapshot für {{ inventory_hostname }} fehlgeschlagen,
+          Wartung läuft laut Konfiguration trotzdem weiter.
+      when:
+        - pve_snapshot_result.rc != 0
+        - not (pve_snapshot_fail_on_error | bool)
+
+    - name: Alte Ansible-Snapshots aufräumen
+      ansible.builtin.include_tasks: prune.yml
+      when: pve_snapshot_result.rc == 0

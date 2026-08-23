@@ -1,0 +1,74 @@
+# Wartungsbericht — Proxmox
+
+**Erstellt:** {{ lookup('pipe', 'date -u +"%Y-%m-%d %H:%M:%S UTC"') }}
+**Lauf-ID:** `{{ maint_run_id }}`
+**Erfasste Hosts:** {{ report_hosts | length }}
+
+{% set problem_hosts = [] %}
+{% for h in report_hosts %}
+{%   if hostvars[h].health_warnings | default([]) | length > 0 %}
+{%     set _ = problem_hosts.append(h) %}
+{%   endif %}
+{% endfor %}
+
+## Zusammenfassung
+
+| Host | Typ | VMID | OS | Uptime | RAM | Root belegt | Updates | Security | Reboot | Status |
+|------|-----|------|----|--------|-----|-------------|---------|----------|--------|--------|
+{% for h in report_hosts %}
+{%   set hv = hostvars[h] %}
+{%   set hd = hv.health | default({}) %}
+{%   if hd %}
+{%     set root = (hd.filesystems | default([]) | selectattr('mount', 'equalto', '/') | list | first) | default({}) %}
+| `{{ h }}` | {{ hd.pve_type }} | {{ hd.pve_vmid }} | {{ hd.os }} | {{ hd.uptime_days }} d | {{ hd.mem_used_pct }} % | {{ root.used_pct | default('?') }} % | {{ hd.pending_updates }} | {{ hd.security_updates }} | {{ 'ja' if hd.reboot_required | bool else 'nein' }} | {{ 'PRÜFEN' if hv.health_warnings | default([]) | length > 0 else 'ok' }} |
+{%   else %}
+| `{{ h }}` | — | — | — | — | — | — | — | — | — | **nicht erreicht** |
+{%   endif %}
+{% endfor %}
+
+{% if problem_hosts | length > 0 %}
+## Auffälligkeiten ({{ problem_hosts | length }} Host(s))
+
+{% for h in problem_hosts %}
+### {{ h }}
+{% for w in hostvars[h].health_warnings %}
+- {{ w }}
+{% endfor %}
+
+{% endfor %}
+{% else %}
+## Auffälligkeiten
+
+Keine — alle erfassten Hosts liegen innerhalb der Schwellwerte
+(Platte < {{ health_disk_warn_percent }} %, RAM < {{ health_memory_warn_percent }} %,
+keine fehlgeschlagenen Units, keine ausstehenden Security-Updates).
+{% endif %}
+
+## Details je Host
+
+{% for h in report_hosts %}
+{%   set hv = hostvars[h] %}
+{%   set hd = hv.health | default({}) %}
+{%   if hd %}
+### {{ h }} — {{ hd.hostname }}
+
+- **Proxmox:** {{ hd.pve_type }} {{ hd.pve_vmid }} auf Node `{{ hd.pve_node }}`
+- **System:** {{ hd.os }}, Kernel `{{ hd.kernel }}`
+- **Uptime:** {{ hd.uptime_days }} Tage
+- **CPU:** {{ hd.cpus }} vCPU, Load (1 min): {{ hd.load1 }}
+- **RAM:** {{ hd.mem_used_pct }} % von {{ hd.mem_total_mb }} MB belegt
+- **Swap:** {{ hd.swap_used_pct }} % belegt
+- **Updates:** {{ hd.pending_updates }} ausstehend, davon {{ hd.security_updates }} sicherheitsrelevant
+- **Neustart erforderlich:** {{ 'ja' if hd.reboot_required | bool else 'nein' }}
+{%     if hd.failed_units | length > 0 %}
+- **Fehlgeschlagene Units:** {{ hd.failed_units | join(', ') }}
+{%     endif %}
+
+| Dateisystem | Typ | Größe | Frei | Belegt |
+|-------------|-----|-------|------|--------|
+{%     for fs in hd.filesystems %}
+| `{{ fs.mount }}` | {{ fs.fstype }} | {{ fs.size_gb }} GB | {{ fs.free_gb }} GB | {{ fs.used_pct }} % |
+{%     endfor %}
+
+{%   endif %}
+{% endfor %}

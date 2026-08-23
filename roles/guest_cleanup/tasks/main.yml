@@ -1,0 +1,118 @@
+---
+# Housekeeping: Paketreste, APT-Cache, Journal und optional Docker aufräumen.
+# Alle Schritte sind für sich abschaltbar.
+
+- name: Plattenbelegung vor dem Aufräumen erfassen
+  ansible.builtin.setup:
+    gather_subset:
+      - hardware
+  changed_when: false
+
+- name: Freien Speicher auf / vor dem Aufräumen merken
+  ansible.builtin.set_fact:
+    cleanup_free_before: >-
+      {{ (ansible_facts.mounts | selectattr('mount', 'equalto', '/') | list | first).size_available
+         | default(0) }}
+
+- name: Nicht mehr benötigte Pakete entfernen
+  ansible.builtin.apt:
+    autoremove: true
+    purge: "{{ cleanup_purge | bool }}"
+    lock_timeout: "{{ guest_apt_lock_timeout | default(300) }}"
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  when: cleanup_autoremove | bool
+
+- name: APT-Cache leeren
+  ansible.builtin.apt:
+    autoclean: true
+    lock_timeout: "{{ guest_apt_lock_timeout | default(300) }}"
+  when: cleanup_apt_cache | bool
+
+- name: Rückstände vollständig entfernter Pakete aufräumen
+  # Pakete im Status 'rc' (removed, config-files) hinterlassen Konfigurationen,
+  # die weder autoremove noch autoclean anfassen.
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      pkgs=$(dpkg -l | awk '/^rc/ {print $2}')
+      if [ -n "$pkgs" ]; then
+        echo "$pkgs" | xargs dpkg --purge
+        echo "PURGED"
+      fi
+    executable: /bin/bash
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  register: cleanup_rc_purge
+  changed_when: "'PURGED' in cleanup_rc_purge.stdout"
+  when: cleanup_purge | bool
+
+- name: Prüfen, ob journald vorhanden ist
+  ansible.builtin.stat:
+    path: /var/log/journal
+  register: cleanup_journal_dir
+
+- name: Journal nach Größe eindampfen
+  ansible.builtin.command:
+    argv:
+      - journalctl
+      - "--vacuum-size={{ cleanup_journal_max_size }}"
+  register: cleanup_journal_size
+  # journalctl meldet auch dann Erfolg, wenn nichts zu tun war; als "changed"
+  # zählt nur, wenn tatsächlich Dateien gelöscht wurden.
+  changed_when: "'Deleted archived journal' in (cleanup_journal_size.stderr | default(''))"
+  when:
+    - cleanup_journal_dir.stat.exists
+    - cleanup_journal_max_size | length > 0
+
+- name: Journal nach Alter eindampfen
+  ansible.builtin.command:
+    argv:
+      - journalctl
+      - "--vacuum-time={{ cleanup_journal_max_age }}"
+  register: cleanup_journal_age
+  changed_when: "'Deleted archived journal' in (cleanup_journal_age.stderr | default(''))"
+  when:
+    - cleanup_journal_dir.stat.exists
+    - cleanup_journal_max_age | length > 0
+
+- name: Docker-Aufräumen
+  when: cleanup_docker_prune | bool
+  block:
+
+    - name: Prüfen, ob Docker installiert ist
+      # `command -v` ist ein Shell-Builtin und braucht daher shell statt command.
+      ansible.builtin.shell:
+        cmd: command -v docker
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      register: cleanup_docker_bin
+
+    - name: Ungenutzte Docker-Ressourcen entfernen
+      ansible.builtin.command:
+        argv: >-
+          {{ ['docker', 'system', 'prune', '--force']
+             + (['--all'] if cleanup_docker_prune_all | bool else []) }}
+      register: cleanup_docker_result
+      changed_when: "'Total reclaimed space: 0B' not in (cleanup_docker_result.stdout | default(''))"
+      when: cleanup_docker_bin.rc == 0
+
+- name: Plattenbelegung nach dem Aufräumen erfassen
+  ansible.builtin.setup:
+    gather_subset:
+      - hardware
+  changed_when: false
+
+- name: Freigewordenen Speicher melden
+  ansible.builtin.set_fact:
+    cleanup_free_after: >-
+      {{ (ansible_facts.mounts | selectattr('mount', 'equalto', '/') | list | first).size_available
+         | default(0) }}
+
+- name: Ergebnis des Aufräumens anzeigen
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: {{ ((cleanup_free_after | int - cleanup_free_before | int)
+         / 1024 / 1024) | round(1) }} MB freigegeben
+      (frei auf /: {{ (cleanup_free_after | int / 1024 / 1024 / 1024) | round(1) }} GB).

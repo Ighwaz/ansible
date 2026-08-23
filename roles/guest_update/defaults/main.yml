@@ -1,0 +1,12 @@
+---
+# "safe" -> apt upgrade, "full" / "dist" -> apt dist-upgrade
+guest_upgrade_type: safe
+
+# Pakete, die per dpkg-Hold von Updates ausgenommen werden.
+guest_hold_packages: []
+
+# Wie lange (Sekunden) auf eine belegte dpkg/apt-Sperre gewartet wird.
+guest_apt_lock_timeout: 300
+
+# Cache-Update erzwingen, auch wenn er noch frisch ist.
+guest_apt_cache_valid_time: 0

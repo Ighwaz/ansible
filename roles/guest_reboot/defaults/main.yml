@@ -1,0 +1,16 @@
+---
+# Darf dieser Host automatisch neu gestartet werden?
+maint_reboot_allowed: true
+
+# Wie lange (Sekunden) auf die Rückkehr des Hosts gewartet wird.
+maint_reboot_timeout: 600
+
+# LXC-Container über den PVE-Host neu starten (`pct reboot`).
+# Zuverlässiger als ein Reboot aus dem Container heraus, weil Proxmox den
+# Container-Lifecycle sauber durchfährt.
+lxc_reboot_via_host: true
+
+# Wartezeit nach dem Auslösen des Neustarts, bevor die Verbindung erneut
+# geprüft wird — verhindert, dass eine noch offene SSH-Session als "wieder da"
+# fehlinterpretiert wird.
+maint_reboot_delay: 15

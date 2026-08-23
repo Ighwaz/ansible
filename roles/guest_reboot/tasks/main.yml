@@ -1,0 +1,73 @@
+---
+# Startet den Gast neu, sofern das Update einen Neustart erfordert
+# (Fakt `guest_reboot_required` aus der Rolle `guest_update`).
+
+- name: Kein Neustart nötig
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: kein Neustart erforderlich."
+  when: not (guest_reboot_required | default(false) | bool)
+
+- name: Neustart erforderlich, aber per Konfiguration untersagt
+  ansible.builtin.debug:
+    msg: >-
+      HINWEIS: {{ inventory_hostname }} benötigt einen Neustart, ist aber mit
+      `maint_reboot_allowed: false` konfiguriert. Bitte manuell einplanen.
+      Grund: {{ guest_reboot_reasons | default([]) | join('; ') }}
+  when:
+    - guest_reboot_required | default(false) | bool
+    - not (maint_reboot_allowed | bool)
+
+- name: Neustart durchführen
+  when:
+    - guest_reboot_required | default(false) | bool
+    - maint_reboot_allowed | bool
+  block:
+
+    - name: LXC-Container über den PVE-Host neu starten
+      when:
+        - pve_type | default('qemu') == 'lxc'
+        - lxc_reboot_via_host | bool
+      block:
+
+        - name: pct reboot auslösen
+          ansible.builtin.command:
+            argv:
+              - pct
+              - reboot
+              - "{{ pve_vmid | string }}"
+              - --timeout
+              - "{{ maint_reboot_timeout | string }}"
+          delegate_to: "{{ pve_owner_host }}"
+          changed_when: true
+
+        - name: Auf Rückkehr des Containers warten
+          ansible.builtin.wait_for_connection:
+            delay: "{{ maint_reboot_delay }}"
+            timeout: "{{ maint_reboot_timeout }}"
+
+    - name: Gast von innen neu starten
+      # Gilt für VMs sowie für LXC, wenn lxc_reboot_via_host deaktiviert ist.
+      ansible.builtin.reboot:
+        reboot_timeout: "{{ maint_reboot_timeout }}"
+        post_reboot_delay: "{{ maint_reboot_delay }}"
+        msg: "Neustart durch Ansible-Wartung"
+      when: not (pve_type | default('qemu') == 'lxc' and lxc_reboot_via_host | bool)
+
+    - name: Fakten nach dem Neustart neu einlesen
+      ansible.builtin.setup:
+        gather_subset:
+          - min
+
+    - name: Prüfen, ob der Reboot-Marker verschwunden ist
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: guest_reboot_marker_after
+
+    - name: Ergebnis des Neustarts melden
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} ist wieder erreichbar
+          (Uptime: {{ ansible_facts.uptime_seconds | default(0) }}s,
+          Kernel: {{ ansible_facts.kernel | default('n/a') }}).
+          {{ 'ACHTUNG: /var/run/reboot-required besteht weiterhin.'
+             if guest_reboot_marker_after.stat.exists else '' }}

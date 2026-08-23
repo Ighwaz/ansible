@@ -1,0 +1,12 @@
+---
+pve_snapshot_enabled: true
+pve_snapshot_prefix: ansible
+pve_snapshot_keep: 3
+pve_snapshot_vmstate: false
+
+# Bricht die Wartung dieses Hosts ab, wenn der Snapshot fehlschlägt.
+# Empfohlen: true — ein Update ohne Rückfallebene ist selten gewollt.
+pve_snapshot_fail_on_error: true
+
+# Beschreibungstext, der am Snapshot hinterlegt wird.
+pve_snapshot_description: "Automatischer Snapshot vor der Wartung (Ansible)"

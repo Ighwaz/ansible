@@ -1,0 +1,98 @@
+---
+# Updates für die Proxmox-Hosts selbst.
+#
+# Zwei Dinge unterscheiden diese Rolle bewusst von der Gast-Wartung:
+#   1. Proxmox verlangt `dist-upgrade`; ein einfaches `upgrade` kann eine
+#      PVE-Installation in einem inkonsistenten Zustand zurücklassen.
+#   2. Es wird nie automatisch neu gestartet — ein Reboot des Hypervisors
+#      reißt alle Gäste mit und gehört in ein geplantes Wartungsfenster.
+
+- name: Proxmox VE auf dem Host verifizieren
+  ansible.builtin.stat:
+    path: /usr/bin/pveversion
+  register: pve_binary
+
+- name: Abbruch, wenn kein PVE-Host
+  ansible.builtin.assert:
+    that:
+      - pve_binary.stat.exists
+    fail_msg: >-
+      Auf {{ inventory_hostname }} wurde kein Proxmox VE gefunden
+      (/usr/bin/pveversion fehlt). Steht der Host versehentlich in der
+      Gruppe 'proxmox'?
+    quiet: true
+
+- name: Repositories konfigurieren
+  ansible.builtin.include_tasks: repos.yml
+  when: pve_manage_repos | bool
+
+- name: Paket-Index aktualisieren
+  ansible.builtin.apt:
+    update_cache: true
+    lock_timeout: "{{ guest_apt_lock_timeout }}"
+  register: pve_apt_cache
+  until: pve_apt_cache is succeeded
+  retries: 3
+  delay: 10
+
+- name: Ausstehende Updates ermitteln
+  ansible.builtin.command:
+    argv: [apt-get, --simulate, dist-upgrade]
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  changed_when: false
+  check_mode: false
+  register: pve_pending_raw
+
+- name: Liste der ausstehenden Pakete aufbereiten
+  ansible.builtin.set_fact:
+    pve_pending_packages: >-
+      {{ pve_pending_raw.stdout_lines
+         | select('match', '^Inst ')
+         | map('regex_replace', '^Inst (\S+).*$', '\1')
+         | list }}
+
+- name: Ausstehende Updates anzeigen
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: {{ pve_pending_packages | length }} Update(s)
+      {{ '-> ' ~ (pve_pending_packages | join(', ')) if pve_pending_packages | length > 0 else '' }}
+
+- name: PVE-Host aktualisieren (dist-upgrade)
+  ansible.builtin.apt:
+    upgrade: dist
+    autoremove: false
+    lock_timeout: "{{ guest_apt_lock_timeout }}"
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  register: pve_upgrade_result
+  when: pve_pending_packages | length > 0
+
+- name: Laufenden und installierten Kernel vergleichen
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's|.*/vmlinuz-||' | sort -V | tail -n1
+    executable: /bin/bash
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  register: pve_newest_kernel
+
+- name: PVE-Version auslesen
+  ansible.builtin.command:
+    argv: [pveversion]
+  changed_when: false
+  check_mode: false
+  register: pve_version
+
+- name: Ergebnis melden
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: {{ pve_version.stdout | trim }}.
+      {{ 'NEUSTART ERFORDERLICH — laufender Kernel ' ~ ansible_facts.kernel
+         ~ ', installiert ' ~ (pve_newest_kernel.stdout | trim)
+         ~ '. Reboot des Hypervisors bitte manuell einplanen (alle Gäste sind betroffen).'
+         if ((pve_newest_kernel.stdout | default('') | trim) | length > 0
+             and (pve_newest_kernel.stdout | trim) != ansible_facts.kernel)
+         else 'Kein Neustart erforderlich.' }}

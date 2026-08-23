@@ -1,0 +1,19 @@
+---
+# Nicht mehr benötigte Pakete entfernen (schließt alte Kernel auf VMs ein —
+# apt behält dabei immer den laufenden und den neuesten Kernel).
+cleanup_autoremove: true
+
+# Entfernte Pakete inkl. ihrer Konfigurationsdateien löschen.
+cleanup_purge: true
+
+# Heruntergeladene .deb-Archive aus /var/cache/apt entfernen.
+cleanup_apt_cache: true
+
+# Journald auf diese Größe bzw. dieses Alter eindampfen. Leer lassen = überspringen.
+cleanup_journal_max_size: 200M
+cleanup_journal_max_age: 30d
+
+# `docker system prune` ausführen, falls Docker installiert ist.
+cleanup_docker_prune: false
+# Auch ungenutzte Images entfernen, nicht nur verwaiste Layer.
+cleanup_docker_prune_all: false

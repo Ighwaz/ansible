@@ -1,0 +1,22 @@
+---
+# Räumt alte, von Ansible angelegte Snapshots auf, ohne neue zu erzeugen.
+# Es werden ausschließlich Snapshots mit dem Präfix `pve_snapshot_prefix`
+# angefasst — manuell angelegte Snapshots bleiben unberührt.
+#
+#   ansible-playbook playbooks/snapshot-prune.yml
+#   ansible-playbook playbooks/snapshot-prune.yml -e pve_snapshot_keep=1
+
+- name: Alte Snapshots aufräumen
+  hosts: guests
+  become: true
+  gather_facts: false
+  max_fail_percentage: "{{ maint_max_fail_percentage | default(100) }}"
+
+  roles:
+    - role: pve_facts
+
+  tasks:
+    - name: Snapshots dieses Gastes prüfen und aufräumen
+      ansible.builtin.include_role:
+        name: pve_snapshot
+        tasks_from: prune.yml

@@ -1,0 +1,30 @@
+---
+# Schreibt einen gesammelten Report über alle Hosts des Plays.
+# Läuft einmal pro Play auf dem Controller — nicht pro Host.
+
+- name: Report-Verzeichnis anlegen
+  ansible.builtin.file:
+    path: "{{ maint_report_dir }}"
+    state: directory
+    mode: "0755"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Health-Report schreiben
+  ansible.builtin.template:
+    src: report.md.j2
+    dest: "{{ maint_report_dir }}/health-{{ maint_run_id }}.md"
+    mode: "0644"
+  vars:
+    # Alle Hosts des Plays, auch die, bei denen etwas schiefging — nicht
+    # erreichte Hosts sollen im Report sichtbar fehlen, nicht verschwinden.
+    report_hosts: "{{ ansible_play_hosts_all }}"
+  delegate_to: localhost
+  become: false
+  run_once: true
+
+- name: Pfad des Reports ausgeben
+  ansible.builtin.debug:
+    msg: "Report geschrieben: {{ maint_report_dir }}/health-{{ maint_run_id }}.md"
+  run_once: true

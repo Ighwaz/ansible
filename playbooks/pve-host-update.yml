@@ -1,0 +1,19 @@
+---
+# Aktualisiert die Proxmox-Hosts selbst (dist-upgrade).
+# Startet den Hypervisor bewusst NIE automatisch neu — bei einem Kernel-Update
+# wird der anstehende Reboot nur gemeldet.
+#
+#   ansible-playbook playbooks/pve-host-update.yml
+#   ansible-playbook playbooks/pve-host-update.yml -e pve_manage_repos=true
+
+- name: Proxmox-Hosts aktualisieren
+  hosts: proxmox
+  become: true
+  gather_facts: true
+  # Bei mehreren Knoten immer nacheinander, damit nie zwei Hypervisor
+  # gleichzeitig mitten im dist-upgrade stehen.
+  serial: 1
+  max_fail_percentage: "{{ maint_max_fail_percentage | default(100) }}"
+
+  roles:
+    - role: pve_host_update

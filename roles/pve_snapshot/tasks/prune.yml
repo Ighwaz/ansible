@@ -1,0 +1,70 @@
+---
+# Entfernt alte Snapshots dieses Gastes. Es werden ausschließlich Snapshots
+# angefasst, deren Name mit `pve_snapshot_prefix` beginnt — manuell angelegte
+# Snapshots bleiben in jedem Fall unberührt.
+
+- name: Vorhandene Snapshots abfragen
+  ansible.builtin.command:
+    argv:
+      - pvesh
+      - get
+      - "/nodes/{{ pve_node }}/{{ pve_type }}/{{ pve_vmid }}/snapshot"
+      - --output-format
+      - json
+  delegate_to: "{{ pve_owner_host }}"
+  changed_when: false
+  check_mode: false
+  register: pve_snapshot_list
+
+- name: Von Ansible verwaltete Snapshots ermitteln
+  ansible.builtin.set_fact:
+    # 'current' ist kein echter Snapshot, sondern der laufende Zustand.
+    # Aufsteigend nach Zeitstempel: ältester zuerst.
+    pve_managed_snapshots: >-
+      {{ (pve_snapshot_list.stdout | from_json)
+         | selectattr('name', 'defined')
+         | rejectattr('name', 'equalto', 'current')
+         | selectattr('name', 'match', '^' ~ pve_snapshot_prefix ~ '[-_]')
+         | sort(attribute='snaptime')
+         | map(attribute='name')
+         | list }}
+
+- name: Zu löschende Snapshots bestimmen
+  ansible.builtin.set_fact:
+    # Die neuesten `pve_snapshot_keep` behalten, alles davor fällt weg.
+    # Über max(0) abgesichert, damit `keep: 0` alle löscht statt keinen.
+    pve_snapshots_to_delete: >-
+      {{ pve_managed_snapshots[
+           : [ (pve_managed_snapshots | length) - (pve_snapshot_keep | int), 0 ] | max
+         ] }}
+
+- name: Alte Snapshots löschen
+  ansible.builtin.command:
+    argv:
+      - "{{ pve_cli }}"
+      - delsnapshot
+      - "{{ pve_vmid | string }}"
+      - "{{ item }}"
+  delegate_to: "{{ pve_owner_host }}"
+  loop: "{{ pve_snapshots_to_delete }}"
+  changed_when: true
+  # Ein fehlgeschlagenes Aufräumen darf die Wartung nicht abbrechen.
+  register: pve_delsnapshot_result
+  failed_when: false
+
+- name: Nicht löschbare Snapshots melden
+  ansible.builtin.debug:
+    msg: >-
+      WARNUNG: Snapshot '{{ item.item }}' konnte nicht gelöscht werden:
+      {{ item.stderr | default('') | trim }}
+  loop: "{{ pve_delsnapshot_result.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: item.rc | default(0) != 0
+
+- name: Ergebnis des Aufräumens melden
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: {{ pve_managed_snapshots | length }} verwaltete(r)
+      Snapshot(s), {{ pve_snapshots_to_delete | length }} gelöscht,
+      {{ pve_snapshot_keep }} behalten.

@@ -1,0 +1,78 @@
+---
+# Ermittelt für jeden Gast seine Proxmox-Identität (vmid, Node, Typ) und legt
+# sie als Fakten ab. Damit müssen im Inventory keine vmids gepflegt werden,
+# solange der Inventory-Name dem Namen in Proxmox entspricht.
+
+- name: Sicherstellen, dass ein PVE-Host im Inventory vorhanden ist
+  ansible.builtin.assert:
+    that:
+      - pve_delegate_host | length > 0
+    fail_msg: >-
+      Die Gruppe 'proxmox' ist leer. Für Snapshots und Host-seitige LXC-Reboots
+      wird mindestens ein PVE-Host im Inventory benötigt.
+    quiet: true
+
+- name: Gäste vom Proxmox-Cluster abfragen
+  ansible.builtin.command:
+    argv:
+      - pvesh
+      - get
+      - /cluster/resources
+      - --type
+      - vm
+      - --output-format
+      - json
+  delegate_to: "{{ pve_delegate_host }}"
+  run_once: true
+  changed_when: false
+  check_mode: false
+  register: pve_cluster_resources
+
+- name: Cluster-Antwort parsen
+  ansible.builtin.set_fact:
+    pve_resources: "{{ pve_cluster_resources.stdout | from_json }}"
+
+- name: Gast über explizit gesetzte vmid auflösen
+  ansible.builtin.set_fact:
+    pve_matches: "{{ pve_resources | selectattr('vmid', 'equalto', pve_vmid | int) | list }}"
+  when: pve_vmid is defined
+
+- name: Gast über den Inventory-Namen auflösen
+  ansible.builtin.set_fact:
+    pve_matches: >-
+      {{ pve_resources
+         | selectattr('name', 'defined')
+         | selectattr('name', 'equalto', inventory_hostname_short)
+         | list }}
+  when: pve_vmid is not defined
+
+- name: Eindeutige Zuordnung sicherstellen
+  ansible.builtin.assert:
+    that:
+      - pve_matches | length == 1
+    fail_msg: >-
+      Konnte '{{ inventory_hostname }}' nicht eindeutig einem Proxmox-Gast
+      zuordnen ({{ pve_matches | length }} Treffer für
+      {{ 'vmid ' ~ pve_vmid if pve_vmid is defined else "Name '" ~ inventory_hostname_short ~ "'" }}).
+      Bitte `pve_vmid` für diesen Host im Inventory setzen.
+    quiet: true
+
+- name: Proxmox-Fakten für diesen Gast setzen
+  ansible.builtin.set_fact:
+    pve_vmid: "{{ pve_matches[0].vmid }}"
+    pve_node: "{{ pve_matches[0].node }}"
+    pve_type: "{{ pve_matches[0].type }}"
+    pve_status: "{{ pve_matches[0].status }}"
+    # pct für Container, qm für VMs
+    pve_cli: "{{ 'pct' if pve_matches[0].type == 'lxc' else 'qm' }}"
+    # Auf welchem Host die pct/qm-Aufrufe für diesen Gast ausgeführt werden.
+    pve_owner_host: >-
+      {{ (groups['proxmox'] | select('match', '^' ~ pve_matches[0].node ~ '(\..*)?$') | list | first)
+         | default(pve_delegate_host, true) }}
+
+- name: Zuordnung anzeigen
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }} -> {{ pve_type }}/{{ pve_vmid }}
+      auf Node {{ pve_node }} (Status: {{ pve_status }})
+  when: pve_facts_verbose | default(false)
