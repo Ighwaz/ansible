@@ -1,0 +1,116 @@
+---
+# Aktualisiert Docker selbst — getrennt vom allgemeinen Paket-Update, damit
+# der Neustart des Daemons ein bewusster Schritt bleibt.
+
+- name: Aufrufkontext für die Docker-CLI bestimmen
+  ansible.builtin.include_tasks: context.yml
+
+- name: Zustand vor dem Update erfassen
+  ansible.builtin.include_tasks: snapshot_state.yml
+  vars:
+    docker_state_phase: before
+
+- name: Hold aufheben, damit die Pakete aktualisierbar sind
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: install
+  loop: "{{ docker_managed_packages }}"
+  when: docker_update_hold | bool
+
+- name: Paket-Index aktualisieren
+  ansible.builtin.apt:
+    update_cache: true
+    lock_timeout: "{{ guest_apt_lock_timeout | default(300) }}"
+  register: docker_update_cache
+  until: docker_update_cache is succeeded
+  retries: 3
+  delay: 10
+
+- name: Ausstehende Docker-Updates ermitteln
+  ansible.builtin.command:
+    argv: "{{ ['apt-get', '--simulate', 'install'] + docker_managed_packages }}"
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  changed_when: false
+  check_mode: false
+  register: docker_pending_raw
+
+- name: Liste der ausstehenden Pakete aufbereiten
+  ansible.builtin.set_fact:
+    docker_pending_packages: >-
+      {{ docker_pending_raw.stdout_lines
+         | select('match', '^Inst ')
+         | map('regex_replace', '^Inst (\S+).*$', '\1')
+         | list }}
+
+- name: Ausstehende Updates anzeigen
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: Docker {{ docker_version_before }} —
+      {{ (docker_pending_packages | length) }} Paket-Update(s)
+      {{ '-> ' ~ (docker_pending_packages | join(', '))
+         if docker_pending_packages | length > 0 else '(nichts zu tun)' }}
+
+- name: Docker aktualisieren
+  ansible.builtin.apt:
+    name: "{{ docker_update_targets }}"
+    state: present
+    lock_timeout: "{{ guest_apt_lock_timeout | default(300) }}"
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  vars:
+    docker_update_targets: >-
+      {{ docker_managed_packages
+         | map('regex_replace', '$', '=' ~ docker_update_version) | list
+         if docker_update_version | length > 0
+         else docker_managed_packages }}
+  when: docker_pending_packages | length > 0
+  register: docker_upgrade_result
+
+- name: Containern Zeit zum Hochfahren geben
+  # Muss inline zwischen Update und Zustandserfassung laufen. Ein Handler
+  # käme erst am Ende des Plays und damit zu spät für den Vergleich.
+  ansible.builtin.wait_for:
+    timeout: "{{ docker_update_settle_seconds }}"
+  when: docker_pending_packages | length > 0
+
+- name: Zustand nach dem Update erfassen
+  ansible.builtin.include_tasks: snapshot_state.yml
+  vars:
+    docker_state_phase: after
+
+- name: Container nach dem Update vergleichen
+  ansible.builtin.include_tasks: verify.yml
+  when:
+    - docker_update_verify_containers | bool
+    - docker_pending_packages | length > 0
+
+- name: Hold wiederherstellen
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop: "{{ docker_managed_packages }}"
+  when: docker_update_hold | bool
+
+- name: Ergebnis melden
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: {{ docker_result_version }}.
+      {{ docker_result_containers }}
+      {{ 'Pakete stehen wieder auf hold.' if docker_update_hold | bool else '' }}
+  vars:
+    docker_result_version: >-
+      {%- if docker_version_after == 'nicht erreichbar' -%}
+        Docker-Daemon nicht erreichbar, Version nicht feststellbar
+      {%- elif docker_version_before != docker_version_after -%}
+        Docker {{ docker_version_before }} -> {{ docker_version_after }}
+      {%- else -%}
+        Docker {{ docker_version_after }} war bereits aktuell
+      {%- endif -%}
+    docker_result_containers: >-
+      {%- if docker_version_after == 'nicht erreichbar' -%}
+        Über die Container lässt sich nichts sagen.
+      {%- else -%}
+        Container laufend: {{ docker_containers_before | length }} vorher,
+        {{ docker_containers_after | length }} nachher.
+      {%- endif -%}

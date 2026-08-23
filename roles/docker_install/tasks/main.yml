@@ -1,0 +1,70 @@
+---
+# Installiert Docker CE — wahlweise klassisch als root oder rootless.
+# Gesteuert über `docker_rootless` (pro Host im Inventory umschaltbar).
+
+- name: Unterstütztes Betriebssystem sicherstellen
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.os_family == 'Debian'
+    fail_msg: >-
+      {{ inventory_hostname }} läuft unter '{{ ansible_facts.os_family }}'.
+      Diese Rolle unterstützt nur Debian/Ubuntu.
+    quiet: true
+
+- name: Rootless-Betrieb in einem LXC-Container absichern
+  # Rootless Docker in einem unprivilegierten LXC braucht Einstellungen, die
+  # auf dem PVE-Host liegen (nesting=1, keyctl=1) sowie funktionierende
+  # User-Namespaces und cgroup-v2-Delegation. Diese Rolle richtet das NICHT
+  # ein und wurde gegen diesen Fall auch nicht getestet.
+  ansible.builtin.assert:
+    that:
+      - docker_allow_rootless_in_lxc | bool
+    fail_msg: >-
+      {{ inventory_hostname }} ist ein LXC-Container und `docker_rootless` ist
+      aktiv. Das erfordert nesting=1 und keyctl=1 in der Container-Config auf
+      dem PVE-Host — diese Rolle richtet das nicht ein. Entweder
+      `docker_rootless: false` setzen, oder nach manueller Vorbereitung des
+      Containers mit `docker_allow_rootless_in_lxc: true` bewusst übergehen.
+    quiet: true
+  when:
+    - docker_rootless | bool
+    - pve_type | default('qemu') == 'lxc'
+
+- name: Paketquelle einrichten
+  ansible.builtin.include_tasks: repo.yml
+  when: docker_manage_repo | bool
+
+- name: Docker-Pakete installieren
+  ansible.builtin.apt:
+    name: "{{ docker_packages_versioned }}"
+    state: present
+    lock_timeout: "{{ guest_apt_lock_timeout | default(300) }}"
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  vars:
+    # Bei gesetzter Version an jedes versionierbare Paket anhängen.
+    # containerd.io und die Plugins folgen einer eigenen Versionierung und
+    # bleiben daher ungepinnt.
+    docker_packages_versioned: >-
+      {{ (docker_packages_pinnable | map('regex_replace', '$', '=' ~ docker_version) | list)
+         + docker_packages_unpinnable
+         if docker_version | length > 0
+         else docker_packages_pinnable + docker_packages_unpinnable }}
+
+- name: Rootful einrichten
+  ansible.builtin.include_tasks: rootful.yml
+  when: not (docker_rootless | bool)
+
+- name: Rootless einrichten
+  ansible.builtin.include_tasks: rootless.yml
+  when: docker_rootless | bool
+
+- name: Docker aus dem allgemeinen Paket-Update heraushalten
+  # Sonst klafft eine Lücke: `docker_update` setzt den Hold erst am Ende
+  # seines Laufs, frisch installiertes Docker wäre also bis dahin ungeschützt
+  # und würde vom nächsten `guest_update` unkontrolliert mitgenommen.
+  ansible.builtin.dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop: "{{ docker_packages_pinnable + docker_packages_unpinnable }}"
+  when: docker_update_hold | default(false) | bool

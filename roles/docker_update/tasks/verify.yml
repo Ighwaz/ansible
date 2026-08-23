@@ -1,0 +1,54 @@
+---
+# Vergleicht den Zustand vor und nach dem Update. Ein Container, der vorher
+# lief und danach nicht mehr, ist der eigentlich interessante Fall — genau
+# deshalb wird der Zustand überhaupt zweimal erfasst.
+#
+# Wichtig ist dabei die Unterscheidung, ob ein Problem NEU ist: War der Daemon
+# schon vor dem Update nicht erreichbar, ist das kein Befund dieses Laufs.
+# Ihn trotzdem dem Update anzulasten würde bei der Fehlersuche in die falsche
+# Richtung weisen.
+
+- name: Verschwundene Container ermitteln
+  ansible.builtin.set_fact:
+    docker_containers_missing: >-
+      {{ docker_containers_before | difference(docker_containers_after) }}
+
+- name: Daemon war schon vor dem Update nicht erreichbar
+  ansible.builtin.debug:
+    msg: >-
+      HINWEIS: Der Docker-Daemon auf {{ inventory_hostname }} war bereits vor
+      diesem Lauf nicht erreichbar und ist es weiterhin. Das Paket-Update
+      wurde eingespielt, über den Zustand der Container lässt sich hier aber
+      nichts aussagen — der Daemon läuft schlicht nicht.
+  when:
+    - docker_version_before == 'nicht erreichbar'
+    - docker_version_after == 'nicht erreichbar'
+
+- name: Daemon durch das Update verloren
+  ansible.builtin.fail:
+    msg: >-
+      Der Docker-Daemon auf {{ inventory_hostname }} lief vor dem Update
+      (Version {{ docker_version_before }}) und ist danach nicht mehr
+      erreichbar. Das Update hat ihn mitgenommen.
+  when:
+    - docker_version_before != 'nicht erreichbar'
+    - docker_version_after == 'nicht erreichbar'
+
+- name: Fehlende Container melden
+  ansible.builtin.fail:
+    msg: >-
+      Nach dem Docker-Update fehlen auf {{ inventory_hostname }}
+      {{ docker_containers_missing | length }} zuvor laufende(r) Container:
+      {{ docker_containers_missing | join(', ') }}.
+      Docker selbst läuft ({{ docker_version_after }}), die Container sind
+      also nicht von allein zurückgekommen — bitte nachsehen.
+  when: docker_containers_missing | length > 0
+
+- name: Zustand unverändert
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: alle {{ docker_containers_before | length }}
+      zuvor laufenden Container sind nach dem Update wieder aktiv.
+  when:
+    - docker_containers_missing | length == 0
+    - docker_version_after != 'nicht erreichbar'

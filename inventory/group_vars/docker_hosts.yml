@@ -1,0 +1,29 @@
+---
+# ---------------------------------------------------------------------------
+# Einstellungen für Hosts, auf denen Docker läuft
+# ---------------------------------------------------------------------------
+
+# Standard für die Gruppe. Einzelne Hosts überschreiben das im Inventory.
+docker_rootless: false
+
+# Benutzer, unter dem der rootless-Daemon läuft (nur bei docker_rootless: true).
+docker_rootless_user: docker
+
+# Benutzer, die in die Gruppe `docker` aufgenommen werden (nur rootful).
+#
+# ACHTUNG: Das ist praktisch gleichbedeutend mit root-Rechten auf dem Host —
+# wer den Docker-Socket erreicht, kann einen privilegierten Container starten
+# und damit das Wirtssystem übernehmen. Bewusst leer.
+docker_users: []
+
+# Docker aus dem allgemeinen `apt upgrade` heraushalten und ausschließlich
+# über playbooks/docker-update.yml aktualisieren. Damit bleibt der Neustart
+# des Daemons — und der Aussetzer aller Container — ein bewusster Schritt.
+docker_update_hold: true
+
+# Logrotation, damit Container-Logs die Platte nicht volllaufen lassen.
+docker_daemon_options:
+  log-driver: json-file
+  log-opts:
+    max-size: "10m"
+    max-file: "3"

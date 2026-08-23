@@ -1,0 +1,48 @@
+---
+# Richtet das offizielle Docker-apt-Repository ein.
+
+- name: Voraussetzungen für HTTPS-Repositories installieren
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - curl
+    state: present
+    lock_timeout: "{{ guest_apt_lock_timeout | default(300) }}"
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+- name: Verzeichnis für Keyrings anlegen
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Architektur ermitteln
+  ansible.builtin.command:
+    argv: [dpkg, --print-architecture]
+  changed_when: false
+  check_mode: false
+  register: docker_dpkg_arch
+
+- name: Signierschlüssel holen
+  ansible.builtin.get_url:
+    url: "https://download.docker.com/linux/{{ docker_repo_distro }}/gpg"
+    dest: /etc/apt/keyrings/docker.asc
+    owner: root
+    group: root
+    mode: "0644"
+    # Erneuert die Datei nur bei tatsächlicher Änderung.
+    force: false
+
+- name: Repository eintragen
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [arch={{ docker_dpkg_arch.stdout | trim }}
+      signed-by=/etc/apt/keyrings/docker.asc]
+      https://download.docker.com/linux/{{ docker_repo_distro }}
+      {{ ansible_facts.distribution_release }} {{ docker_repo_channel }}
+    filename: docker
+    state: present
+    update_cache: true

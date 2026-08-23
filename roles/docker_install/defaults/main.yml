@@ -1,0 +1,67 @@
+---
+# ---------------------------------------------------------------------------
+# Betriebsmodus
+# ---------------------------------------------------------------------------
+# false = klassisches Docker als root (Daemon via systemd, System-Socket)
+# true  = rootless: Daemon läuft als unprivilegierter Benutzer im User-systemd
+#
+# Pro Host im Inventory umschaltbar.
+docker_rootless: false
+
+# Benutzer, unter dem der rootless-Daemon läuft. Wird angelegt, falls nicht
+# vorhanden. Nur relevant bei docker_rootless: true.
+docker_rootless_user: docker
+
+# Beim rootless-Betrieb den systemweiten Daemon abschalten. Beide parallel zu
+# betreiben ist möglich, aber eine verlässliche Quelle von Verwirrung darüber,
+# gegen welchen Daemon ein `docker`-Aufruf gerade läuft.
+docker_rootless_disable_system_daemon: true
+
+# ---------------------------------------------------------------------------
+# Paketquelle
+# ---------------------------------------------------------------------------
+# Offizielles Docker-Repo einrichten. Auf false setzen, wenn die Pakete aus
+# einer anderen Quelle kommen sollen (z. B. den Distributions-Paketen).
+docker_manage_repo: true
+
+# Kanal: stable, test oder nightly.
+docker_repo_channel: stable
+
+# Distribution im Docker-Repo-Pfad: download.docker.com/linux/<distro>.
+# Wird aus den Fakten abgeleitet ('ubuntu' bzw. 'debian'). Überschreibbar für
+# Derivate, die sich selbst anders benennen, aber das Repo der Basis nutzen.
+docker_repo_distro: "{{ ansible_facts.distribution | lower }}"
+
+# Bestimmte Version festhalten, z. B. "5:27.3.1-1~ubuntu.24.04~noble".
+# Leer = jeweils neueste Version aus dem Repo.
+docker_version: ""
+
+# ---------------------------------------------------------------------------
+# Benutzer und Berechtigungen
+# ---------------------------------------------------------------------------
+# Benutzer, die in die Gruppe `docker` aufgenommen werden (nur rootful).
+#
+# ACHTUNG: Mitgliedschaft in der Gruppe `docker` ist praktisch gleichbedeutend
+# mit root-Rechten auf dem Host — wer den Socket erreicht, kann ein privileged
+# Container starten und das Wirtssystem übernehmen. Bewusst leer als Standard.
+docker_users: []
+
+# ---------------------------------------------------------------------------
+# Daemon-Konfiguration
+# ---------------------------------------------------------------------------
+# Wird nach /etc/docker/daemon.json (rootful) bzw.
+# ~/.config/docker/daemon.json (rootless) geschrieben.
+docker_daemon_options:
+  log-driver: json-file
+  log-opts:
+    max-size: "10m"
+    max-file: "3"
+
+# Live-Restore lässt Container beim Neustart des Daemons weiterlaufen.
+# Im rootless-Betrieb nicht unterstützt und wird dort ignoriert.
+docker_live_restore: true
+
+# Übergeht die Absicherung gegen rootless Docker in einem LXC-Container.
+# Steht bewusst in defaults und nicht in vars: Role-vars schlagen
+# Inventory-Variablen, der Ausweg wäre dort nicht überschreibbar.
+docker_allow_rootless_in_lxc: false

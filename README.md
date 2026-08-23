@@ -48,6 +48,8 @@ in Proxmox entspricht, löst Ansible vmid, Node und Typ automatisch über
 | `playbooks/snapshot.yml` | Nur Snapshots anlegen, sonst nichts | ja (nur Snapshot) |
 | `playbooks/snapshot-prune.yml` | Alte Ansible-Snapshots aufräumen | ja (nur Snapshots) |
 | `playbooks/pve-host-update.yml` | Die PVE-Hosts selbst aktualisieren | ja |
+| `playbooks/docker-setup.yml` | Docker installieren (rootful oder rootless) | ja |
+| `playbooks/docker-update.yml` | Docker selbst aktualisieren, mit Container-Kontrolle | ja |
 
 ### Vor dem ersten Lauf: Preflight
 
@@ -123,6 +125,65 @@ fehlgeschlagener Host das gesamte Play beenden.
 
 **Host für Host statt alles auf einmal.** Standard ist `maint_serial: 1`.
 Fällt ein Dienst beim Neustart aus, betrifft das immer nur einen Gast.
+
+## Docker
+
+Hosts mit Docker stehen im Inventory in der Gruppe `docker_hosts`. Ob ein Host
+klassisch als root oder rootless fährt, entscheidet `docker_rootless` — je Host
+umschaltbar:
+
+```yaml
+docker_hosts:
+  hosts:
+    vm-build:
+      docker_rootless: true
+    vm-home-assistant:      # ohne Angabe: rootful
+```
+
+```bash
+ansible-playbook playbooks/docker-setup.yml
+ansible-playbook playbooks/docker-update.yml --limit vm-build
+```
+
+### Warum Docker-Updates ein eigenes Playbook haben
+
+`guest_update` fährt ein `apt upgrade` und würde Docker dabei einfach
+mitnehmen — mitten im Wartungslauf, ohne Rücksicht darauf, was gerade an
+Containern läuft. Deshalb setzen beide Docker-Rollen die Pakete auf `hold`
+(`docker_update_hold: true`), womit `apt upgrade` sie in Ruhe lässt.
+
+`docker-update.yml` hebt den Hold auf, aktualisiert, setzt ihn wieder — und
+erfasst dabei **vor und nach** dem Update, welche Container laufen. Kommt einer
+nicht zurück, bricht das Playbook mit dessen Namen ab. War der Daemon schon
+vorher nicht erreichbar, wird das ausdrücklich als solches gemeldet statt dem
+Update angelastet.
+
+### Rootless: was du wissen solltest
+
+- Der Daemon läuft in der systemd-User-Instanz von `docker_rootless_user`.
+  Damit er einen Neustart überlebt, wird für den Benutzer **Lingering**
+  aktiviert; der Socket liegt unter `/run/user/<uid>/docker.sock`.
+- Der systemweite Daemon wird abgeschaltet
+  (`docker_rootless_disable_system_daemon`). Beide parallel zu betreiben ist
+  möglich, aber eine verlässliche Quelle von Verwirrung darüber, gegen welchen
+  Daemon ein `docker`-Aufruf gerade läuft.
+- `live-restore` wird im rootless-Betrieb nicht gesetzt — der Daemon
+  unterstützt es dort nicht.
+- Fehlen dem Benutzer Einträge in `/etc/subuid` und `/etc/subgid`, bricht die
+  Rolle mit dem passenden `usermod`-Aufruf ab, statt Bereiche selbst zu
+  vergeben. Eine falsch gewählte Spanne kollidiert mit anderen Benutzern und
+  ist hinterher mühsam zu entwirren.
+- **In LXC-Containern** verweigert die Rolle rootless-Betrieb. Das braucht
+  `nesting=1` und `keyctl=1` in der Container-Config auf dem PVE-Host, was
+  diese Rolle nicht einrichtet. Bewusst übergehen mit
+  `docker_allow_rootless_in_lxc: true`.
+
+### Zur Gruppe `docker`
+
+`docker_users` ist bewusst leer. Mitgliedschaft in der Gruppe `docker` ist
+praktisch gleichbedeutend mit root-Rechten auf dem Host: wer den Socket
+erreicht, kann einen privilegierten Container starten und damit das
+Wirtssystem übernehmen.
 
 ## Wichtige Variablen
 
@@ -233,4 +294,6 @@ roles/
   guest_reboot              Neustart (LXC über den Host, VMs von innen)
   guest_cleanup             Paketreste, APT-Cache, Journal, Docker
   guest_health              Lesende Bestandsaufnahme + Report
+  docker_install            Docker CE, rootful oder rootless
+  docker_update             Docker selbst aktualisieren, mit Container-Kontrolle
 ```

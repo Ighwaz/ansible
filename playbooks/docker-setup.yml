@@ -1,0 +1,26 @@
+---
+# Installiert Docker auf den Hosts der Gruppe `docker_hosts`.
+# Rootful oder rootless entscheidet `docker_rootless` je Host.
+#
+#   ansible-playbook playbooks/docker-setup.yml
+#   ansible-playbook playbooks/docker-setup.yml --limit vm-build
+#   ansible-playbook playbooks/docker-setup.yml -e docker_rootless=true --limit vm-build
+
+- name: Docker einrichten
+  hosts: docker_hosts
+  become: true
+  gather_facts: true
+  serial: "{{ maint_serial | default(1) }}"
+  max_fail_percentage: "{{ maint_max_fail_percentage | default(100) }}"
+
+  tasks:
+    - name: Proxmox-Zuordnung ermitteln
+      # Nur nötig, damit die Rolle einen LXC-Container als solchen erkennt und
+      # vor rootless-Betrieb darin warnen kann.
+      ansible.builtin.include_role:
+        name: pve_facts
+      when: groups['proxmox'] | default([]) | length > 0
+
+    - name: Docker installieren
+      ansible.builtin.include_role:
+        name: docker_install

@@ -1,0 +1,160 @@
+---
+# Rootless-Betrieb: der Daemon läuft als unprivilegierter Benutzer in dessen
+# systemd-User-Instanz. Der Socket liegt unter /run/user/<uid>/docker.sock.
+#
+# Die Reihenfolge ist hier nicht beliebig: Lingering muss VOR allen
+# `systemctl --user`-Aufrufen aktiv sein, weil erst dadurch /run/user/<uid>
+# dauerhaft existiert und eine User-systemd-Instanz ohne Login läuft.
+
+- name: Benutzer für den rootless-Daemon anlegen
+  ansible.builtin.user:
+    name: "{{ docker_rootless_user }}"
+    state: present
+    create_home: true
+    shell: /bin/bash
+  register: docker_rootless_account
+
+- name: UID des Benutzers merken
+  ansible.builtin.set_fact:
+    docker_rootless_uid: "{{ docker_rootless_account.uid }}"
+
+- name: Zusatzpakete für den rootless-Betrieb installieren
+  ansible.builtin.apt:
+    name: "{{ docker_rootless_packages }}"
+    state: present
+    lock_timeout: "{{ guest_apt_lock_timeout | default(300) }}"
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+
+# --- User-Namespaces --------------------------------------------------------
+
+- name: Zuordnung von subuid/subgid prüfen
+  ansible.builtin.command:
+    argv: [grep, -q, "^{{ docker_rootless_user }}:", "{{ item }}"]
+  loop:
+    - /etc/subuid
+    - /etc/subgid
+  changed_when: false
+  failed_when: false
+  register: docker_subid_check
+
+- name: Fehlende subuid/subgid melden
+  # Bewusst kein automatisches Vergeben von Bereichen: eine falsch gewählte
+  # Spanne kollidiert mit anderen Benutzern und ist hinterher mühsam zu
+  # entwirren. Der Eingriff gehört in bewusste Hände.
+  ansible.builtin.fail:
+    msg: >-
+      Für '{{ docker_rootless_user }}' fehlen Einträge in
+      {{ docker_subid_check.results | selectattr('rc', 'ne', 0)
+         | map(attribute='item') | join(' und ') }}.
+      Rootless Docker braucht diese Bereiche zwingend. Auf dem Host anlegen mit:
+      usermod --add-subuids 100000-165535 --add-subgids 100000-165535
+      {{ docker_rootless_user }}
+      — und dabei prüfen, dass der Bereich mit keinem anderen Benutzer
+      kollidiert.
+  when: docker_subid_check.results | selectattr('rc', 'ne', 0) | list | length > 0
+
+# --- systemd-User-Instanz ---------------------------------------------------
+
+- name: Lingering aktivieren
+  # Ohne das läuft die User-systemd-Instanz nur, solange der Benutzer
+  # eingeloggt ist — der Daemon wäre nach jedem Neustart weg.
+  ansible.builtin.command:
+    argv: [loginctl, enable-linger, "{{ docker_rootless_user }}"]
+    creates: "/var/lib/systemd/linger/{{ docker_rootless_user }}"
+
+- name: Auf das Laufzeitverzeichnis warten
+  ansible.builtin.wait_for:
+    path: "/run/user/{{ docker_rootless_uid }}"
+    state: present
+    timeout: 30
+
+# --- Systemweiten Daemon abschalten ----------------------------------------
+
+- name: Systemweiten Docker-Dienst abschalten
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop:
+    - docker.service
+    - docker.socket
+  failed_when: false
+  when: docker_rootless_disable_system_daemon | bool
+
+# --- Rootless-Installation --------------------------------------------------
+
+- name: Rootless-Docker einrichten
+  ansible.builtin.command:
+    argv: [/usr/bin/dockerd-rootless-setuptool.sh, install]
+    creates: "/home/{{ docker_rootless_user }}/.config/systemd/user/docker.service"
+  become: true
+  become_user: "{{ docker_rootless_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ docker_rootless_uid }}"
+    PATH: /usr/bin:/usr/sbin:/bin:/sbin
+
+- name: Konfigurationsverzeichnis des Benutzers anlegen
+  ansible.builtin.file:
+    path: "/home/{{ docker_rootless_user }}/.config/docker"
+    state: directory
+    owner: "{{ docker_rootless_user }}"
+    group: "{{ docker_rootless_user }}"
+    mode: "0755"
+
+- name: Datei daemon.json des Benutzers schreiben
+  ansible.builtin.copy:
+    content: "{{ docker_daemon_options | to_nice_json }}\n"
+    dest: "/home/{{ docker_rootless_user }}/.config/docker/daemon.json"
+    owner: "{{ docker_rootless_user }}"
+    group: "{{ docker_rootless_user }}"
+    mode: "0644"
+  # live-restore wird hier bewusst nicht gesetzt: der rootless-Daemon
+  # unterstützt es nicht und würde beim Start darüber stolpern.
+  notify: Rootless-Docker neu starten
+
+- name: Rootless-Dienst aktivieren und starten
+  ansible.builtin.systemd_service:
+    name: docker
+    scope: user
+    state: started
+    enabled: true
+    daemon_reload: true
+  become: true
+  become_user: "{{ docker_rootless_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ docker_rootless_uid }}"
+
+# --- Bedienbarkeit ----------------------------------------------------------
+
+- name: DOCKER_HOST für den Benutzer hinterlegen
+  # Ohne das spricht ein `docker`-Aufruf des Benutzers den System-Socket an,
+  # den es im rootless-Betrieb nicht mehr gibt.
+  ansible.builtin.blockinfile:
+    path: "/home/{{ docker_rootless_user }}/.bashrc"
+    marker: "# {mark} von Ansible verwaltet (rootless Docker)"
+    block: |
+      export XDG_RUNTIME_DIR=/run/user/{{ docker_rootless_uid }}
+      export DOCKER_HOST=unix:///run/user/{{ docker_rootless_uid }}/docker.sock
+    owner: "{{ docker_rootless_user }}"
+    group: "{{ docker_rootless_user }}"
+    mode: "0644"
+    create: true
+
+- name: Installation überprüfen
+  ansible.builtin.command:
+    argv: [docker, version, --format, "{% raw %}{{.Server.Version}}{% endraw %}"]
+  changed_when: false
+  become: true
+  become_user: "{{ docker_rootless_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ docker_rootless_uid }}"
+    DOCKER_HOST: "unix:///run/user/{{ docker_rootless_uid }}/docker.sock"
+  register: docker_verify_rootless
+
+- name: Ergebnis melden
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: Docker {{ docker_verify_rootless.stdout | trim }}
+      läuft rootless als '{{ docker_rootless_user }}'
+      (Socket: /run/user/{{ docker_rootless_uid }}/docker.sock).

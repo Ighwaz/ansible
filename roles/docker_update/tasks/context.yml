@@ -1,0 +1,28 @@
+---
+# Ermittelt, ob Docker hier rootful oder rootless läuft, und baut daraus die
+# Umgebung, mit der die Docker-CLI angesprochen werden muss.
+
+- name: UID des rootless-Benutzers ermitteln
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ docker_rootless_user }}"
+  when: docker_rootless | default(false) | bool
+
+- name: Aufrufkontext zusammensetzen
+  ansible.builtin.set_fact:
+    # Benutzer, unter dem `docker` aufgerufen wird.
+    docker_cli_user: >-
+      {{ docker_rootless_user if docker_rootless | default(false) | bool else 'root' }}
+    # Umgebung: im rootful-Fall leer, sonst Socket der User-Instanz.
+    docker_cli_env: >-
+      {{ {'XDG_RUNTIME_DIR': '/run/user/' ~ docker_rootless_resolved_uid,
+          'DOCKER_HOST': 'unix:///run/user/' ~ docker_rootless_resolved_uid ~ '/docker.sock'}
+         if docker_rootless | default(false) | bool else {} }}
+  vars:
+    docker_rootless_resolved_uid: >-
+      {{ (ansible_facts.getent_passwd[docker_rootless_user][1])
+         if docker_rootless | default(false) | bool else '' }}
+
+- name: Docker-Pakete festlegen, die diese Rolle verwaltet
+  ansible.builtin.set_fact:
+    docker_managed_packages: "{{ docker_update_packages }}"

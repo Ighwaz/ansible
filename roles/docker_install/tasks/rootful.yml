@@ -1,0 +1,52 @@
+---
+# Klassischer Betrieb: Daemon läuft als root, Socket unter /var/run/docker.sock.
+
+- name: Konfigurationsverzeichnis anlegen
+  ansible.builtin.file:
+    path: /etc/docker
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Datei daemon.json schreiben
+  ansible.builtin.copy:
+    content: "{{ docker_daemon_config | to_nice_json }}\n"
+    dest: /etc/docker/daemon.json
+    owner: root
+    group: root
+    mode: "0644"
+  vars:
+    docker_daemon_config: >-
+      {{ docker_daemon_options
+         | combine({'live-restore': docker_live_restore | bool}) }}
+  notify: Docker neu starten
+
+- name: Dienst aktivieren und starten
+  ansible.builtin.systemd_service:
+    name: docker
+    state: started
+    enabled: true
+    daemon_reload: true
+
+- name: Benutzer in die Gruppe docker aufnehmen
+  # Sicherheitshinweis siehe defaults/main.yml: Mitgliedschaft in dieser
+  # Gruppe ist praktisch gleichbedeutend mit root auf diesem Host.
+  ansible.builtin.user:
+    name: "{{ item }}"
+    groups: docker
+    append: true
+  loop: "{{ docker_users }}"
+  when: docker_users | length > 0
+
+- name: Installation überprüfen
+  ansible.builtin.command:
+    argv: [docker, version, --format, "{% raw %}{{.Server.Version}}{% endraw %}"]
+  changed_when: false
+  register: docker_verify_rootful
+
+- name: Ergebnis melden
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: Docker {{ docker_verify_rootful.stdout | trim }}
+      läuft im rootful-Modus.

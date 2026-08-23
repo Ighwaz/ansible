@@ -1,0 +1,34 @@
+---
+# Erfasst Version und laufende Container. Wird zweimal aufgerufen — vor und
+# nach dem Update — gesteuert über `docker_state_phase`.
+
+- name: Docker-Version auslesen ({{ docker_state_phase }})
+  ansible.builtin.command:
+    argv: [docker, version, --format, "{% raw %}{{.Server.Version}}{% endraw %}"]
+  become: true
+  become_user: "{{ docker_cli_user }}"
+  environment: "{{ docker_cli_env }}"
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  register: docker_version_probe
+
+- name: Laufende Container auflisten ({{ docker_state_phase }})
+  ansible.builtin.command:
+    argv: [docker, ps, --format, "{% raw %}{{.Names}}{% endraw %}"]
+  become: true
+  become_user: "{{ docker_cli_user }}"
+  environment: "{{ docker_cli_env }}"
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  register: docker_ps_probe
+
+- name: Zustand unter der jeweiligen Phase ablegen
+  ansible.builtin.set_fact:
+    "docker_version_{{ docker_state_phase }}": >-
+      {{ docker_version_probe.stdout | default('nicht erreichbar') | trim
+         if docker_version_probe.rc | default(1) == 0 else 'nicht erreichbar' }}
+    "docker_containers_{{ docker_state_phase }}": >-
+      {{ docker_ps_probe.stdout_lines | default([]) | select | list
+         if docker_ps_probe.rc | default(1) == 0 else [] }}
