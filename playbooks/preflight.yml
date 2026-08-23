@@ -20,7 +20,9 @@
     - name: Benötigte Proxmox-Werkzeuge suchen
       # Über PATH statt über feste Pfade: das prüft zugleich, ob die Werkzeuge
       # für den ausführenden Benutzer tatsächlich aufrufbar sind.
-      ansible.builtin.shell:
+      # `command -v` ist ein Shell-Builtin — es gibt kein /usr/bin/command,
+      # daher ist shell hier zwingend und nicht durch command ersetzbar.
+      ansible.builtin.shell:  # noqa: command-instead-of-shell
         cmd: "command -v {{ item }}"
       loop:
         - pvesh
@@ -92,7 +94,7 @@
       # des Playbooks — daher block/rescue statt eines harten assert.
       when: groups['proxmox'] | default([]) | length > 0
       block:
-        - name: pve_facts anwenden
+        - name: Rolle pve_facts anwenden
           ansible.builtin.include_role:
             name: pve_facts
       rescue:
@@ -100,7 +102,7 @@
           ansible.builtin.debug:
             msg: "{{ inventory_hostname }}: Zuordnung zu einem Proxmox-Gast nicht möglich."
 
-    - name: python3-apt suchen (wird für --check benötigt)
+    - name: Modul python3-apt suchen (wird für --check benötigt)
       ansible.builtin.command:
         argv: ["{{ ansible_python_interpreter | default('/usr/bin/python3') }}", -c, "import apt"]
       changed_when: false
