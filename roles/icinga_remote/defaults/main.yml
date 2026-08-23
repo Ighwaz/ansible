@@ -1,0 +1,15 @@
+---
+# Benutzer, unter dem sich das Monitoring per SSH anmeldet.
+# Muss zu `icinga_ssh_user` der Rolle icinga_server passen.
+icinga_ssh_user: icinga
+
+# Verzeichnis für die selbst mitgebrachten Check-Skripte.
+icinga_custom_plugin_dir: /usr/local/lib/nagios/plugins
+
+# Zusätzlich zu monitoring-plugins-basic auch -standard installieren.
+# Darin steckt unter anderem check_apt.
+icinga_install_standard_plugins: true
+
+# Zugriff auf den Monitoring-Zugang auf diese Adresse beschränken.
+# Wird normalerweise aus den Fakten des Monitoring-Hosts gesetzt.
+icinga_master_address: ""

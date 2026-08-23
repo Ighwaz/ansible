@@ -1,0 +1,111 @@
+---
+# Von Ansible verwaltet — Änderungen werden beim nächsten Lauf überschrieben.
+#
+# Der Stack besteht aus fünf Diensten:
+#   mariadb    Datenbank für Icinga DB und Icinga Web 2
+#   redis      Zwischenspeicher, über den icinga2 seine Zustände abliefert
+#   icinga2    der eigentliche Monitoring-Kern
+#   icingadb   überträgt die Zustände aus Redis in die Datenbank
+#   icingaweb2 die Weboberfläche
+
+name: icinga
+
+services:
+
+  mariadb:
+    image: {{ icinga_image_mariadb }}
+    restart: unless-stopped
+    environment:
+      MARIADB_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+      MARIADB_DATABASE: icingadb
+      MARIADB_USER: icingadb
+      MARIADB_PASSWORD: ${ICINGADB_PASSWORD}
+      TZ: {{ icinga_timezone }}
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: {{ icinga_image_redis }}
+    restart: unless-stopped
+    environment:
+      TZ: {{ icinga_timezone }}
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  icinga2:
+    image: {{ icinga_image_icinga2 }}
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      ICINGA2_FEATURE_ICINGADB: "1"
+      ICINGA2_FEATURE_ICINGADB_HOST: redis
+      ICINGA2_FEATURE_ICINGADB_PORT: "6379"
+      ICINGA2_API_USERS: "icingaweb2:${ICINGA_API_PASSWORD}"
+      TZ: {{ icinga_timezone }}
+    volumes:
+      - icinga2-data:/data
+      # Von Ansible erzeugte Host- und Service-Definitionen.
+      - {{ icinga_base_dir }}/conf.d:/data/etc/icinga2/conf.d/ansible:ro
+      # Schlüssel für check_by_ssh. Nur lesend und nur der private Schlüssel.
+      - {{ icinga_base_dir }}/ssh/id_ed25519:/data/etc/icinga2/ssh/id_ed25519:ro
+
+  icingadb:
+    image: {{ icinga_image_icingadb }}
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      ICINGADB_DATABASE_HOST: mariadb
+      ICINGADB_DATABASE_DATABASE: icingadb
+      ICINGADB_DATABASE_USER: icingadb
+      ICINGADB_DATABASE_PASSWORD: ${ICINGADB_PASSWORD}
+      ICINGADB_REDIS_HOST: redis
+      TZ: {{ icinga_timezone }}
+
+  icingaweb2:
+    image: {{ icinga_image_web }}
+    restart: unless-stopped
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      icinga2:
+        condition: service_started
+    ports:
+      - "{{ icinga_web_port }}:8080"
+    environment:
+      ICINGAWEB2_ADMIN_USER: admin
+      ICINGAWEB2_ADMIN_PASSWORD: ${ICINGAWEB_PASSWORD}
+      ICINGAWEB2_DB_HOST: mariadb
+      ICINGAWEB2_DB_USER: icingaweb2
+      ICINGAWEB2_DB_PASSWORD: ${ICINGAWEB_PASSWORD}
+      ICINGAWEB2_ICINGADB_HOST: mariadb
+      ICINGAWEB2_ICINGADB_USER: icingadb
+      ICINGAWEB2_ICINGADB_PASSWORD: ${ICINGADB_PASSWORD}
+      ICINGAWEB2_API_HOST: icinga2
+      ICINGAWEB2_API_USER: icingaweb2
+      ICINGAWEB2_API_PASSWORD: ${ICINGA_API_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MARIADB_ROOT_PASSWORD}
+      TZ: {{ icinga_timezone }}
+    volumes:
+      - icingaweb2-data:/data
+
+volumes:
+  mariadb-data:
+  redis-data:
+  icinga2-data:
+  icingaweb2-data:

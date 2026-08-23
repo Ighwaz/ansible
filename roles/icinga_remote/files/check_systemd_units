@@ -1,0 +1,56 @@
+#!/bin/sh
+# Zählt fehlgeschlagene systemd-Units.
+#
+# Aufruf: check_systemd_units [-w ANZAHL] [-c ANZAHL]
+# Rückgabe: 0 OK, 1 WARNING, 2 CRITICAL, 3 UNKNOWN
+
+set -eu
+
+warn=1
+crit=2
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -w) warn="$2"; shift 2 ;;
+        -c) crit="$2"; shift 2 ;;
+        -h|--help) echo "Aufruf: $0 [-w ANZAHL] [-c ANZAHL]"; exit 3 ;;
+        *) echo "SYSTEMD UNKNOWN - unbekannte Option: $1"; exit 3 ;;
+    esac
+done
+
+if ! command -v systemctl >/dev/null 2>&1; then
+    echo "SYSTEMD UNKNOWN - systemctl nicht vorhanden"
+    exit 3
+fi
+
+# Der Exit-Code von systemctl wird ausgewertet, nicht verworfen: laeuft
+# systemd gar nicht (etwa in einem Container ohne systemd als PID 1), scheitert
+# der Aufruf. Das als "keine fehlgeschlagenen Units" zu lesen waere ein
+# falsches Entwarnen — hier gehoert UNKNOWN hin, nicht OK.
+if raw=$(systemctl list-units --state=failed --no-legend --plain 2>&1); then
+    units=$(printf '%s\n' "$raw" | awk 'NF {print $1}' | tr '\n' ' ' | sed 's/ $//')
+else
+    reason=$(printf '%s' "$raw" | head -n 1)
+    echo "SYSTEMD UNKNOWN - systemctl nicht ansprechbar: ${reason}"
+    exit 3
+fi
+
+# Leere Ausgabe bei Exit 0 heisst: nichts fehlgeschlagen.
+if [ -z "$units" ]; then
+    count=0
+else
+    count=$(printf '%s\n' "$units" | tr ' ' '\n' | grep -c . || true)
+fi
+
+perf="failed=${count};${warn};${crit};0"
+
+if [ "$count" -ge "$crit" ]; then
+    echo "SYSTEMD CRITICAL - ${count} fehlgeschlagene Unit(s): ${units} | ${perf}"
+    exit 2
+elif [ "$count" -ge "$warn" ]; then
+    echo "SYSTEMD WARNING - ${count} fehlgeschlagene Unit(s): ${units} | ${perf}"
+    exit 1
+fi
+
+echo "SYSTEMD OK - keine fehlgeschlagenen Units | ${perf}"
+exit 0

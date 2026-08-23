@@ -1,0 +1,58 @@
+/*
+ * Von Ansible erzeugt — Änderungen werden beim nächsten Lauf überschrieben.
+ *
+ * Quelle ist das Ansible-Inventory: jeder Host der Gruppe `guests` wird hier
+ * zu einem Icinga-Host. Die Service-Definitionen in services.conf greifen
+ * über `vars.ssh_checks` auf genau diese Hosts zu.
+ */
+
+/*
+ * Eigene Vorlage statt des mitgelieferten "generic-host": so hängt diese
+ * Konfiguration nicht davon ab, welche Vorlagen im Container vorhanden sind.
+ */
+template Host "ansible-managed-host" {
+  check_command = "hostalive"
+  max_check_attempts = {{ icinga_max_check_attempts }}
+  check_interval = {{ icinga_check_interval }}
+  retry_interval = {{ icinga_retry_interval }}
+}
+
+{% for host in groups['guests'] | default([]) | sort %}
+{% set hv = hostvars[host] %}
+object Host "{{ host }}" {
+  import "ansible-managed-host"
+
+  address = "{{ hv.ansible_host | default(host) }}"
+  display_name = "{{ host }}"
+
+  /* Aus dem Inventory übernommen */
+  vars.ssh_checks = true
+  vars.ssh_user = "{{ icinga_ssh_user }}"
+{% if hv.pve_type is defined %}
+  vars.pve_type = "{{ hv.pve_type }}"
+{% endif %}
+{% if hv.pve_vmid is defined %}
+  vars.pve_vmid = "{{ hv.pve_vmid }}"
+{% endif %}
+{% if hv.pve_node is defined %}
+  vars.pve_node = "{{ hv.pve_node }}"
+{% endif %}
+
+  /*
+   * Container teilen sich den Kernel des Hosts. Ein Reboot-Check auf Basis
+   * des Kernels wäre dort bedeutungslos — dieselbe Unterscheidung, die auch
+   * die Wartungsrollen treffen.
+   */
+  vars.is_container = {{ 'true' if hv.pve_type | default('qemu') == 'lxc' else 'false' }}
+
+  /* Gruppenzugehörigkeit aus dem Inventory, für Filter in der Oberfläche.
+     Das Array muss initialisiert sein, bevor += darauf angewendet wird. */
+  vars.ansible_groups = []
+{% for grp in hv.group_names | default([]) | sort %}
+{% if grp not in ['all', 'ungrouped'] %}
+  vars.ansible_groups += [ "{{ grp }}" ]
+{% endif %}
+{% endfor %}
+}
+
+{% endfor %}

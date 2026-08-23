@@ -1,0 +1,61 @@
+#!/bin/sh
+# Speicherauslastung als Monitoring-Plugin.
+#
+# In monitoring-plugins gibt es kein check_memory, deshalb dieses Skript.
+# Gerechnet wird gegen MemAvailable, nicht gegen MemFree: Seiten-Cache und
+# Puffer sind wiederverwendbar und dürfen nicht als belegt zählen — sonst
+# meldet jeder gesunde Linux-Host dauerhaft "voll".
+#
+# Aufruf: check_memory [-w PROZENT] [-c PROZENT]
+# Rückgabe: 0 OK, 1 WARNING, 2 CRITICAL, 3 UNKNOWN
+
+set -eu
+
+warn=80
+crit=90
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -w) warn="$2"; shift 2 ;;
+        -c) crit="$2"; shift 2 ;;
+        -h|--help) echo "Aufruf: $0 [-w PROZENT] [-c PROZENT]"; exit 3 ;;
+        *) echo "MEMORY UNKNOWN - unbekannte Option: $1"; exit 3 ;;
+    esac
+done
+
+if [ ! -r /proc/meminfo ]; then
+    echo "MEMORY UNKNOWN - /proc/meminfo nicht lesbar"
+    exit 3
+fi
+
+total_kb=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+avail_kb=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
+
+if [ -z "${total_kb:-}" ] || [ -z "${avail_kb:-}" ] || [ "$total_kb" -eq 0 ]; then
+    echo "MEMORY UNKNOWN - MemTotal/MemAvailable nicht ermittelbar"
+    exit 3
+fi
+
+used_kb=$((total_kb - avail_kb))
+# Eine Nachkommastelle über Ganzzahlarithmetik, damit keine Abhängigkeit
+# zu bc oder awk-Fließkomma entsteht.
+used_pmille=$((used_kb * 1000 / total_kb))
+used_int=$((used_pmille / 10))
+used_dec=$((used_pmille % 10))
+
+total_mb=$((total_kb / 1024))
+used_mb=$((used_kb / 1024))
+
+perf="used_pct=${used_int}.${used_dec}%;${warn};${crit};0;100 used_mb=${used_mb}MB;;;0;${total_mb}"
+text="${used_int}.${used_dec}% belegt (${used_mb} von ${total_mb} MB)"
+
+if [ "$used_int" -ge "$crit" ]; then
+    echo "MEMORY CRITICAL - ${text} | ${perf}"
+    exit 2
+elif [ "$used_int" -ge "$warn" ]; then
+    echo "MEMORY WARNING - ${text} | ${perf}"
+    exit 1
+fi
+
+echo "MEMORY OK - ${text} | ${perf}"
+exit 0

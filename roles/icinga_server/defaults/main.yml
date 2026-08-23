@@ -1,0 +1,25 @@
+---
+# Verzeichnis auf dem Monitoring-Host, in dem der Stack liegt.
+icinga_base_dir: /opt/icinga
+
+# Port, unter dem Icinga Web 2 erreichbar ist.
+icinga_web_port: 8080
+
+# Image-Tags. Bewusst gepinnt statt 'latest': ein unbemerkter Sprung auf eine
+# neue Major-Version des Stacks ist beim Monitoring das Letzte, was man will.
+icinga_image_icinga2: icinga/icinga2:2.14
+icinga_image_icingadb: icinga/icingadb:1.2
+icinga_image_redis: icinga/icingadb-redis:7.2
+icinga_image_web: icinga/icingaweb2:2.12
+icinga_image_mariadb: mariadb:11
+
+# Zeitzone der Container.
+icinga_timezone: Europe/Berlin
+
+# Benutzername, unter dem check_by_ssh sich an den Gästen anmeldet.
+# Muss zum gleichnamigen Wert in der Rolle icinga_remote passen.
+icinga_ssh_user: icinga
+
+# Adresse, von der aus die Gäste Verbindungen des Monitorings akzeptieren.
+# Leer = wird aus der primären IP des Monitoring-Hosts abgeleitet.
+icinga_master_address: ""

@@ -1,0 +1,117 @@
+/*
+ * Von Ansible erzeugt — Änderungen werden beim nächsten Lauf überschrieben.
+ *
+ * Die Prüfungen greifen über `assign where` auf alle Hosts zu, die in
+ * hosts.conf `vars.ssh_checks` gesetzt bekommen haben. Neue Gäste im
+ * Inventory erscheinen damit automatisch mit vollständigem Prüfsatz.
+ */
+
+template Service "ansible-managed-service" {
+  max_check_attempts = {{ icinga_max_check_attempts }}
+  check_interval = {{ icinga_check_interval }}
+  retry_interval = {{ icinga_retry_interval }}
+}
+
+/*
+ * Alle über SSH ausgeführten Prüfungen teilen sich diese Vorlage. Der private
+ * Schlüssel liegt im Container unter dem hier eingetragenen Pfad und ist von
+ * außen nur lesend eingehängt.
+ *
+ * StrictHostKeyChecking=accept-new: der Host-Schlüssel eines Gastes wird beim
+ * ersten Kontakt übernommen und danach geprüft. Das schützt nicht gegen einen
+ * Angreifer, der schon beim allerersten Kontakt dazwischensitzt — dagegen
+ * hülfe nur ein vorab befülltes known_hosts.
+ */
+template Service "ansible-ssh-check" {
+  import "ansible-managed-service"
+
+  check_command = "by_ssh"
+  vars.by_ssh_logname = host.vars.ssh_user
+  vars.by_ssh_identity = "{{ icinga_ssh_identity_in_container }}"
+  vars.by_ssh_options = [ "StrictHostKeyChecking=accept-new", "BatchMode=yes" ]
+  vars.by_ssh_timeout = 30
+}
+
+{% if 'ping' in icinga_services_enabled %}
+apply Service "ping" {
+  import "ansible-managed-service"
+  check_command = "ping4"
+  assign where host.vars.ssh_checks
+}
+{% endif %}
+
+{% if 'ssh' in icinga_services_enabled %}
+apply Service "ssh" {
+  import "ansible-managed-service"
+  check_command = "ssh"
+  assign where host.vars.ssh_checks
+}
+{% endif %}
+
+{% if 'disk' in icinga_services_enabled %}
+apply Service "disk" {
+  import "ansible-ssh-check"
+  vars.by_ssh_command = "{{ icinga_plugin_dir }}/check_disk -w {{ icinga_disk_warn }} -c {{ icinga_disk_crit }} -p {{ icinga_disk_path }}"
+  assign where host.vars.ssh_checks
+}
+{% endif %}
+
+{% if 'load' in icinga_services_enabled %}
+apply Service "load" {
+  import "ansible-ssh-check"
+  /* -r rechnet die Last auf die Anzahl der CPU-Kerne um */
+  vars.by_ssh_command = "{{ icinga_plugin_dir }}/check_load -r -w {{ icinga_load_warn }} -c {{ icinga_load_crit }}"
+  assign where host.vars.ssh_checks
+}
+{% endif %}
+
+{% if 'memory' in icinga_services_enabled %}
+apply Service "memory" {
+  import "ansible-ssh-check"
+  /* Eigenes Skript: monitoring-plugins bringt kein check_memory mit */
+  vars.by_ssh_command = "{{ icinga_custom_plugin_dir }}/check_memory -w {{ icinga_memory_warn }} -c {{ icinga_memory_crit }}"
+  assign where host.vars.ssh_checks
+}
+{% endif %}
+
+{% if 'swap' in icinga_services_enabled %}
+apply Service "swap" {
+  import "ansible-ssh-check"
+  vars.by_ssh_command = "{{ icinga_plugin_dir }}/check_swap -w {{ icinga_swap_warn }} -c {{ icinga_swap_crit }}"
+  /*
+   * Nicht für Container: ein LXC sieht den Swap des Wirts. Der Wert sagt dort
+   * nichts über den Container aus und würde bei Swap-Druck auf dem Host
+   * sämtliche Container gleichzeitig rot färben.
+   */
+  assign where host.vars.ssh_checks && host.vars.is_container == false
+}
+{% endif %}
+
+{% if 'procs' in icinga_services_enabled %}
+apply Service "procs" {
+  import "ansible-ssh-check"
+  vars.by_ssh_command = "{{ icinga_plugin_dir }}/check_procs -w {{ icinga_procs_warn }} -c {{ icinga_procs_crit }}"
+  assign where host.vars.ssh_checks
+}
+{% endif %}
+
+{% if 'systemd' in icinga_services_enabled %}
+apply Service "systemd" {
+  import "ansible-ssh-check"
+  /* Eigenes Skript; meldet UNKNOWN statt OK, wenn systemd nicht ansprechbar ist */
+  vars.by_ssh_command = "{{ icinga_custom_plugin_dir }}/check_systemd_units -w {{ icinga_systemd_warn }} -c {{ icinga_systemd_crit }}"
+  assign where host.vars.ssh_checks
+}
+{% endif %}
+
+{% if 'apt' in icinga_services_enabled %}
+apply Service "apt" {
+  import "ansible-ssh-check"
+  /* Ausstehende Pakete. Läuft mit --simulate und braucht daher kein root. */
+  vars.by_ssh_command = "{{ icinga_plugin_dir }}/check_apt"
+  /* Updates sind selten dringend — deutlich seltener prüfen als den Rest. */
+  check_interval = 1h
+  retry_interval = 10m
+  assign where host.vars.ssh_checks
+}
+{% endif %}

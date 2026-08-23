@@ -1,0 +1,50 @@
+---
+# ---------------------------------------------------------------------------
+# Host, der den Icinga-Stack trägt
+# ---------------------------------------------------------------------------
+
+# Verzeichnis, in dem Compose-Datei, Zugangsdaten und Schlüssel liegen.
+icinga_base_dir: /opt/icinga
+
+# Port der Weboberfläche.
+icinga_web_port: 8080
+
+icinga_timezone: Europe/Berlin
+
+# Benutzer, unter dem sich das Monitoring an den Gästen anmeldet.
+# Muss zum gleichnamigen Wert in inventory/group_vars/guests.yml passen.
+icinga_ssh_user: icinga
+
+# Adresse, von der aus die Gäste Monitoring-Verbindungen akzeptieren.
+# Leer = wird aus der primären IP dieses Hosts abgeleitet.
+icinga_master_address: ""
+
+# --- Schwellwerte der Prüfungen --------------------------------------------
+# Achtung: check_disk und check_swap rechnen in FREIEM Platz.
+# "15%" heißt also "warnen, wenn weniger als 15 % frei sind".
+icinga_disk_warn: "15%"
+icinga_disk_crit: "8%"
+
+icinga_swap_warn: "30%"
+icinga_swap_crit: "15%"
+
+# check_load rechnet mit -r gegen die Last pro CPU-Kern.
+icinga_load_warn: "1.5,1.2,1.0"
+icinga_load_crit: "3.0,2.5,2.0"
+
+# Speicher in Prozent BELEGT (eigenes Skript, andere Richtung als check_disk).
+icinga_memory_warn: 85
+icinga_memory_crit: 95
+
+# Welche Prüfungen erzeugt werden. Einzelne hier herausnehmen, um sie
+# flottenweit abzuschalten.
+icinga_services_enabled:
+  - ping
+  - ssh
+  - disk
+  - load
+  - memory
+  - swap
+  - procs
+  - systemd
+  - apt

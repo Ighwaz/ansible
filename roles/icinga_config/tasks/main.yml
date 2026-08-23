@@ -1,0 +1,63 @@
+---
+# Erzeugt Host- und Service-Definitionen aus dem Ansible-Inventory und lädt
+# icinga2 neu. Läuft auf dem Monitoring-Host.
+
+- name: Host-Definitionen schreiben
+  ansible.builtin.template:
+    src: hosts.conf.j2
+    dest: "{{ icinga_base_dir }}/conf.d/hosts.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  register: icinga_hosts_conf
+
+- name: Service-Definitionen schreiben
+  ansible.builtin.template:
+    src: services.conf.j2
+    dest: "{{ icinga_base_dir }}/conf.d/services.conf"
+    owner: root
+    group: root
+    mode: "0644"
+  register: icinga_services_conf
+
+- name: Konfiguration im Container prüfen
+  # Vor dem Neuladen: eine fehlerhafte Konfiguration würde icinga2 sonst beim
+  # Reload abstürzen lassen und das Monitoring stillschweigend beenden.
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - -f
+      - "{{ icinga_base_dir }}/compose.yml"
+      - exec
+      - -T
+      - icinga2
+      - icinga2
+      - daemon
+      - -C
+  changed_when: false
+  register: icinga_config_check
+  failed_when: icinga_config_check.rc != 0
+
+- name: Dienst icinga2 neu laden
+  ansible.builtin.command:
+    argv:
+      - docker
+      - compose
+      - -f
+      - "{{ icinga_base_dir }}/compose.yml"
+      - kill
+      - -s
+      - HUP
+      - icinga2
+  changed_when: true
+  when: icinga_hosts_conf.changed or icinga_services_conf.changed
+
+- name: Ergebnis melden
+  ansible.builtin.debug:
+    msg: >-
+      Konfiguration erzeugt für {{ groups['guests'] | default([]) | length }}
+      Gast/Gäste mit {{ icinga_services_enabled | length }} Prüfung(en) je Host.
+      {{ 'icinga2 wurde neu geladen.'
+         if (icinga_hosts_conf.changed or icinga_services_conf.changed)
+         else 'Keine Änderung, kein Reload nötig.' }}

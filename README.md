@@ -50,6 +50,8 @@ in Proxmox entspricht, löst Ansible vmid, Node und Typ automatisch über
 | `playbooks/pve-host-update.yml` | Die PVE-Hosts selbst aktualisieren | ja |
 | `playbooks/docker-setup.yml` | Docker installieren (rootful oder rootless) | ja |
 | `playbooks/docker-update.yml` | Docker selbst aktualisieren, mit Container-Kontrolle | ja |
+| `playbooks/icinga-setup.yml` | Icinga2-Stack aufsetzen und Gäste vorbereiten | ja |
+| `playbooks/icinga-config.yml` | Prüfungen aus dem Inventory neu erzeugen | ja |
 
 ### Vor dem ersten Lauf: Preflight
 
@@ -185,6 +187,88 @@ praktisch gleichbedeutend mit root-Rechten auf dem Host: wer den Socket
 erreicht, kann einen privilegierten Container starten und damit das
 Wirtssystem übernehmen.
 
+## Monitoring mit Icinga2
+
+Der Icinga-Stack läuft als Docker-Verbund auf dem Host der Gruppe
+`monitoring` — dieser Host muss also auch in `docker_hosts` stehen. Geprüft
+wird **agentless über SSH**: kein Agent auf den Gästen, keine Zertifikate,
+kein PKI-Aufbau.
+
+```bash
+ansible-playbook playbooks/docker-setup.yml --limit vm-monitoring   # zuerst
+ansible-playbook playbooks/icinga-setup.yml                         # dann
+```
+
+`icinga-setup.yml` erledigt drei Dinge nacheinander: es startet den Stack und
+erzeugt dabei ein SSH-Schlüsselpaar, richtet auf jedem Gast den
+unprivilegierten Zugang `icinga` samt Monitoring-Plugins ein und hinterlegt
+dort den öffentlichen Schlüssel, und erzeugt zuletzt die Host- und
+Service-Definitionen aus dem Inventory.
+
+Im Alltag genügt danach `icinga-config.yml` — etwa wenn ein Gast dazukommt
+oder ein Schwellwert sich ändert. Ein **neuer** Gast braucht allerdings
+einmalig `icinga-setup.yml`, weil dort sein Monitoring-Zugang entsteht.
+
+### Der Stack
+
+| Dienst | Aufgabe |
+|---|---|
+| `icinga2` | der Monitoring-Kern, führt die Prüfungen aus |
+| `redis` | Zwischenspeicher, über den icinga2 Zustände abliefert |
+| `icingadb` | überträgt die Zustände von Redis in die Datenbank |
+| `mariadb` | Datenbank für Icinga DB und Icinga Web 2 |
+| `icingaweb2` | Weboberfläche, per Vorgabe auf Port 8080 |
+
+Die Image-Tags sind gepinnt statt `latest`: ein unbemerkter Sprung auf eine
+neue Major-Version ist ausgerechnet beim Monitoring das Letzte, was man will.
+
+Passwörter werden beim ersten Lauf erzeugt und in `/opt/icinga/.env` abgelegt
+(nur für root lesbar). Sie stehen bewusst nicht im Repository.
+
+### Welche Prüfungen entstehen
+
+Je Gast, gesteuert über `icinga_services_enabled`:
+
+| Prüfung | Herkunft | Anmerkung |
+|---|---|---|
+| `ping`, `ssh` | vom Master direkt | ohne SSH-Anmeldung |
+| `disk` | `check_disk` | Schwellwerte in **freiem** Platz |
+| `load` | `check_load -r` | umgerechnet auf CPU-Kerne |
+| `swap` | `check_swap` | **nicht für Container** — siehe unten |
+| `procs` | `check_procs` | |
+| `apt` | `check_apt` | ausstehende Updates, Intervall 1 h |
+| `memory` | eigenes Skript | rechnet gegen `MemAvailable` |
+| `systemd` | eigenes Skript | fehlgeschlagene Units |
+
+Zwei Prüfungen bringt das Repo selbst mit, weil `monitoring-plugins` sie nicht
+enthält. Beide liegen unter `roles/icinga_remote/files/`.
+
+**Swap läuft nicht in Containern.** Ein LXC sieht den Swap des Wirts. Der Wert
+sagt dort nichts über den Container aus und würde bei Swap-Druck auf dem Host
+die gesamte Flotte gleichzeitig rot färben — dieselbe Unterscheidung, die auch
+die Wartungsrollen beim Kernel treffen.
+
+### Sicherheit des Monitoring-Zugangs
+
+Der Benutzer `icinga` auf den Gästen ist unprivilegiert und hat kein sudo.
+Sein Schlüssel in `authorized_keys` ist eingeschränkt auf die Adresse des
+Monitoring-Hosts, ohne Weiterleitungen und ohne Terminal. Auf einen einzelnen
+erzwungenen Befehl lässt sich das nicht reduzieren: `check_by_ssh` schickt die
+jeweilige Prüfung als Kommando mit.
+
+Host-Schlüssel werden mit `StrictHostKeyChecking=accept-new` beim ersten
+Kontakt übernommen. Das schützt nicht gegen einen Angreifer, der schon beim
+allerersten Kontakt dazwischensitzt — dagegen hülfe nur ein vorab befülltes
+`known_hosts`.
+
+### Mitgelieferte Beispielkonfiguration
+
+Das icinga2-Image bringt eine eigene Beispielkonfiguration in `conf.d` mit,
+deren `apply`-Regeln zusätzlich auf die von Ansible erzeugten Hosts greifen.
+Konkret entsteht dadurch neben der Prüfung `ping` noch ein `ping4` je Host.
+Doppelte Prüfungen stören nicht, kosten aber Platz in der Oberfläche — wer sie
+loswerden will, entfernt die Beispieldateien im Volume `icinga2-data`.
+
 ## Wichtige Variablen
 
 Zu setzen in `inventory/group_vars/guests.yml`, pro Host im Inventory oder
@@ -296,4 +380,7 @@ roles/
   guest_health              Lesende Bestandsaufnahme + Report
   docker_install            Docker CE, rootful oder rootless
   docker_update             Docker selbst aktualisieren, mit Container-Kontrolle
+  icinga_server             Icinga2-Stack als Docker-Verbund
+  icinga_remote             Monitoring-Zugang und Plugins auf den Gästen
+  icinga_config             Host-/Service-Definitionen aus dem Inventory
 ```
