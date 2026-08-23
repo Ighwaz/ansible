@@ -16,3 +16,33 @@ maint_run_id: "{{ ansible_date_time.iso8601_basic_short | default(lookup('pipe',
 
 # Verzeichnis auf dem Controller für Health-Reports.
 maint_report_dir: "{{ playbook_dir }}/../reports"
+
+# ---------------------------------------------------------------------------
+# SSH-Schlüssel
+# ---------------------------------------------------------------------------
+# Öffentliche Schlüssel, die auf alle Hosts ausgerollt werden. Der Name landet
+# als Kommentar in der authorized_keys und macht einen Widerruf eindeutig.
+#
+# NUR ÖFFENTLICHE SCHLÜSSEL. Private gehören niemals ins Repository.
+ssh_keys_admin: []
+# Beispiel:
+# ssh_keys_admin:
+#   - name: laptop
+#     key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... tofa@laptop"
+#   - name: telefon
+#     key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... tofa@telefon"
+
+# Schlüssel, mit dem Ansible selbst arbeitet. Muss hier stehen, sonst entfernt
+# ihn der exklusive Lauf beim Ansible-Benutzer — die Rolle bricht in dem Fall
+# allerdings ab, statt sich auszusperren.
+ssh_keys_automation: []
+
+# authorized_keys vollständig verwalten. Erst dadurch ist ein Widerruf möglich.
+ssh_keys_exclusive: true
+
+# Passwort-Anmeldung abschalten. Greift erst, nachdem die Rolle geprüft hat,
+# dass Schlüssel vorhanden sind, sshd Drop-ins einbindet, die Konfiguration
+# gültig ist und eine frische Verbindung danach zustande kommt.
+#
+# Bewusst auf false: erst ausrollen und überprüfen, dann härten.
+ssh_keys_disable_password_auth: false

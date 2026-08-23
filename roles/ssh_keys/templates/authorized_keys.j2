@@ -1,0 +1,13 @@
+# Von Ansible verwaltet — Änderungen an dieser Datei werden überschrieben.
+# Schlüssel hinzufügen oder widerrufen über ssh_keys_admin im Inventory.
+#
+# Benutzer: {{ ssh_keys_target.user }}
+#
+# Je Eintrag werden nur Typ und Schlüsselmaterial übernommen. Der Kommentar
+# aus der .pub-Datei entfällt zugunsten des konfigurierten Namens — damit ist
+# eindeutig, welcher Eintrag beim Widerruf gemeint ist.
+{% for entry in ssh_keys_for_user %}
+
+# {{ entry.name }}
+{{ entry.key.split()[0] }} {{ entry.key.split()[1] }} {{ entry.name }}
+{% endfor %}

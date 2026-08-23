@@ -1,0 +1,26 @@
+---
+# Rollt öffentliche SSH-Schlüssel auf allen Hosts aus und schaltet auf Wunsch
+# die Passwort-Anmeldung ab.
+#
+#   ansible-playbook playbooks/ssh-keys.yml --check     # erst ansehen
+#   ansible-playbook playbooks/ssh-keys.yml
+#   ansible-playbook playbooks/ssh-keys.yml --limit ct-nginx
+#
+# Die Schlüssel stehen in inventory/group_vars/all.yml unter `ssh_keys_admin`.
+# Ein Widerruf besteht darin, den Eintrag dort zu entfernen und das Playbook
+# erneut laufen zu lassen — bei exklusiver Verwaltung verschwindet er damit
+# überall.
+
+- name: SSH-Schlüssel ausrollen
+  hosts: all
+  become: true
+  gather_facts: true
+  # Nacheinander: bricht die Härtung auf einem Host den Zugang, sind die
+  # übrigen noch unangetastet und der Fehler bleibt auf einen Host begrenzt.
+  serial: "{{ maint_serial | default(1) }}"
+  # Hier bewusst NICHT auf 100: sperrt sich der erste Host aus, soll der Lauf
+  # stehenbleiben statt der Reihe nach die ganze Flotte unerreichbar zu machen.
+  max_fail_percentage: 0
+
+  roles:
+    - role: ssh_keys

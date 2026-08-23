@@ -1,0 +1,17 @@
+# Von Ansible verwaltet — Änderungen werden überschrieben.
+#
+# Rückgängig machen: diese Datei löschen und sshd neu einlesen.
+
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+
+# ChallengeResponseAuthentication ist der alte Name von
+# KbdInteractiveAuthentication. Ohne ihn bleibt auf älteren Fassungen ein
+# Weg zur Passwort-Anmeldung offen.
+ChallengeResponseAuthentication no
+
+PubkeyAuthentication yes
+{% if ssh_keys_permit_root_login | length > 0 %}
+
+PermitRootLogin {{ ssh_keys_permit_root_login }}
+{% endif %}

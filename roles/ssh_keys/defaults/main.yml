@@ -1,0 +1,68 @@
+---
+# ---------------------------------------------------------------------------
+# Auszurollende öffentliche Schlüssel
+# ---------------------------------------------------------------------------
+# Jeder Eintrag hat einen Namen und den öffentlichen Schlüssel. Der Name landet
+# als Kommentar in der authorized_keys — das macht später nachvollziehbar,
+# welcher Schlüssel zu welchem Gerät gehört, und einen Widerruf eindeutig.
+#
+# ssh_keys_admin:
+#   - name: laptop
+#     key: "ssh-ed25519 AAAAC3Nza... tofa@laptop"
+#
+# NUR ÖFFENTLICHE SCHLÜSSEL. Private Schlüssel gehören niemals ins Repository.
+ssh_keys_admin: []
+
+# Schlüssel, mit dem Ansible selbst arbeitet. Wird zusätzlich zu ssh_keys_admin
+# beim Ansible-Benutzer hinterlegt.
+#
+# Wichtig bei exklusiver Verwaltung: fehlt der Automatisierungsschlüssel hier,
+# entfernt der Lauf ihn aus der authorized_keys und der nächste Ansible-Lauf
+# kommt nicht mehr herein. Die Rolle sichert dagegen ab (siehe tasks/guard.yml),
+# der richtige Ort für den Schlüssel ist aber diese Liste.
+ssh_keys_automation: []
+
+# ---------------------------------------------------------------------------
+# Zielbenutzer
+# ---------------------------------------------------------------------------
+# Für jeden Eintrag wird eine authorized_keys geschrieben.
+#   key_sets: welche der obigen Listen für diesen Benutzer gelten
+#
+# Das Feld heißt bewusst `key_sets` und nicht `keys`: In Jinja löst
+# `eintrag.keys` auf die gleichnamige Python-Methode des Dictionaries auf
+# statt auf das Feld — ein Fehler, der erst zur Laufzeit auffällt.
+ssh_keys_targets:
+  - user: "{{ ansible_user | default('ansible') }}"
+    key_sets: [admin, automation]
+  - user: root
+    key_sets: [admin]
+
+# ---------------------------------------------------------------------------
+# Verwaltungsart
+# ---------------------------------------------------------------------------
+# true  = authorized_keys enthält danach genau die konfigurierten Schlüssel.
+#         Erst dadurch ist ein Widerruf möglich: Eintrag entfernen, Playbook
+#         laufen lassen, weg.
+# false = nur ergänzen, vorhandene Schlüssel bleiben.
+ssh_keys_exclusive: true
+
+# Notausgang für den Fall, dass die Absicherung berechtigterweise im Weg steht
+# — etwa beim erstmaligen Ausrollen auf einen Host, dessen authorized_keys
+# noch leer ist. Bewusst pro Lauf zu setzen, nicht dauerhaft.
+ssh_keys_force: false
+
+# ---------------------------------------------------------------------------
+# sshd-Härtung
+# ---------------------------------------------------------------------------
+# Passwort-Anmeldung abschalten. Greift erst, nachdem die Rolle geprüft hat,
+# dass Schlüssel vorhanden sind und sshd die neue Konfiguration akzeptiert.
+ssh_keys_disable_password_auth: false
+
+# PermitRootLogin wird bewusst NICHT angefasst. Ein falscher Wert hier nimmt
+# den root-Zugang, der bei kaputtem sudo die letzte Rückfallebene ist.
+# Auf 'prohibit-password' setzen, um root nur per Schlüssel zuzulassen.
+ssh_keys_permit_root_login: ""
+
+# Dateiname der Drop-in-Konfiguration. Eine eigene Datei statt Änderungen an
+# der sshd_config: rückgängig machen heißt dann, eine Datei zu löschen.
+ssh_keys_sshd_dropin: /etc/ssh/sshd_config.d/60-ansible-hardening.conf

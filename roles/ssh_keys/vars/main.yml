@@ -1,0 +1,3 @@
+---
+# Name der sshd-Unit. Debian/Ubuntu nennen sie 'ssh', nicht 'sshd'.
+ssh_keys_sshd_service: ssh

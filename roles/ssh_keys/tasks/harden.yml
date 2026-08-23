@@ -1,0 +1,132 @@
+---
+# Schaltet die Passwort-Anmeldung ab. Jeder Schritt hier ist darauf ausgelegt,
+# lieber abzubrechen als einen Host unerreichbar zu hinterlassen.
+
+- name: Ansible darf nicht selbst per Passwort verbunden sein
+  # Wird die Passwort-Anmeldung abgeschaltet, während Ansible genau darüber
+  # hereinkommt, sperrt sich die Automatisierung mit diesem Lauf selbst aus.
+  ansible.builtin.assert:
+    that:
+      - ansible_password is not defined or (ansible_password | default('') | length == 0)
+      - ansible_ssh_pass is not defined or (ansible_ssh_pass | default('') | length == 0)
+    fail_msg: >-
+      ABBRUCH: Ansible ist mit {{ inventory_hostname }} über ein Passwort
+      verbunden. Die Passwort-Anmeldung abzuschalten würde die Automatisierung
+      aussperren. Zuerst den Zugang auf Schlüssel umstellen
+      (ansible_ssh_private_key_file), dann härten.
+    quiet: true
+
+- name: Vorhandensein der Schlüssel überprüfen
+  ansible.builtin.stat:
+    path: "{{ ansible_facts.getent_passwd[item.user][4] }}/.ssh/authorized_keys"
+  loop: "{{ ssh_keys_targets }}"
+  loop_control:
+    label: "{{ item.user }}"
+  register: ssh_keys_authfile_check
+
+- name: Abbruch bei fehlender oder leerer authorized_keys
+  ansible.builtin.fail:
+    msg: >-
+      ABBRUCH auf {{ inventory_hostname }}: Für
+      {{ ssh_keys_authfile_empty | map(attribute='item.user') | join(', ') }}
+      fehlt eine authorized_keys oder sie ist leer. Ohne hinterlegte Schlüssel
+      wäre der Host nach dem Abschalten der Passwort-Anmeldung nicht mehr
+      erreichbar.
+  vars:
+    ssh_keys_authfile_empty: >-
+      {{ ssh_keys_authfile_check.results
+         | rejectattr('stat.exists')
+         | list
+         + (ssh_keys_authfile_check.results
+            | selectattr('stat.exists')
+            | selectattr('stat.size', 'lt', 50) | list) }}
+  when: ssh_keys_authfile_empty | length > 0
+
+- name: Laufenden sshd voraussetzen
+  # Ohne laufenden sshd fehlt /run/sshd, und `sshd -t` bricht mit
+  # "Missing privilege separation directory" ab — einer Meldung, die nichts
+  # über die eigentliche Ursache sagt. Lieber hier klar abbrechen.
+  ansible.builtin.command:
+    argv: [systemctl, is-active, "{{ ssh_keys_sshd_service }}"]
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  register: ssh_keys_sshd_active
+
+- name: Abbruch, wenn sshd nicht läuft
+  ansible.builtin.fail:
+    msg: >-
+      ABBRUCH auf {{ inventory_hostname }}: Der Dienst
+      '{{ ssh_keys_sshd_service }}' ist nicht aktiv
+      (systemctl meldet '{{ ssh_keys_sshd_active.stdout | default('') | trim }}').
+      Die Härtung setzt einen laufenden sshd voraus — ohne ihn bliebe die
+      Änderung wirkungslos, und die Konfigurationsprüfung scheitert an einer
+      irreführenden Meldung über /run/sshd.
+  when: ssh_keys_sshd_active.rc != 0
+
+- name: Unterstützung für Drop-in-Dateien prüfen
+  # Ältere sshd-Fassungen kennen kein Include. Ohne das würde die Datei
+  # geschrieben, aber wirkungslos bleiben — schlimmer als ein Abbruch, weil
+  # die Härtung dann nur scheinbar aktiv ist.
+  ansible.builtin.command:
+    argv: [grep, -qE, '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/', /etc/ssh/sshd_config]
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  register: ssh_keys_include_check
+
+- name: Abbruch, wenn Drop-ins nicht eingebunden werden
+  ansible.builtin.fail:
+    msg: >-
+      ABBRUCH auf {{ inventory_hostname }}: /etc/ssh/sshd_config bindet
+      /etc/ssh/sshd_config.d/ nicht ein. Eine Drop-in-Datei bliebe wirkungslos
+      und die Härtung wäre nur scheinbar aktiv. Bitte die Include-Zeile von
+      Hand ergänzen oder die Härtung für diesen Host abschalten.
+  when: ssh_keys_include_check.rc != 0
+
+- name: Härtung als Drop-in schreiben
+  ansible.builtin.template:
+    src: sshd_hardening.conf.j2
+    dest: "{{ ssh_keys_sshd_dropin }}"
+    owner: root
+    group: root
+    mode: "0644"
+    # sshd -t prüft die GESAMTE Konfiguration inklusive dieser Datei. Schlägt
+    # es fehl, wird nichts geschrieben und sshd läuft unverändert weiter.
+    validate: "/usr/sbin/sshd -t -f %s"
+  register: ssh_keys_dropin
+
+- name: Gesamtkonfiguration von sshd prüfen
+  ansible.builtin.command:
+    argv: [/usr/sbin/sshd, -t]
+  changed_when: false
+  register: ssh_keys_sshd_test
+
+- name: Dienst sshd neu einlesen
+  # reload statt restart: bestehende Sitzungen bleiben bestehen. Falls doch
+  # etwas schiefgeht, bleibt die aktuelle Verbindung als Rettungsanker offen.
+  #
+  # Bewusst kein Handler: der Neustart muss HIER passieren, weil die folgende
+  # Prüfung mit frischer Verbindung sonst eine Konfiguration testen würde, die
+  # noch gar nicht aktiv ist. Ein Handler liefe erst am Ende des Plays.
+  ansible.builtin.systemd_service:  # noqa: no-handler
+    name: "{{ ssh_keys_sshd_service }}"
+    state: reloaded
+  when: ssh_keys_dropin.changed
+
+- name: Verbindung zurücksetzen und neu aufbauen
+  # Der eigentliche Beweis: eine FRISCHE Verbindung nach der Änderung. Die
+  # bestehende Sitzung würde auch dann noch funktionieren, wenn die neue
+  # Konfiguration kaputt ist.
+  ansible.builtin.meta: reset_connection
+
+- name: Erreichbarkeit nach der Härtung bestätigen
+  ansible.builtin.wait_for_connection:
+    timeout: 60
+
+- name: Härtung bestätigen
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: Passwort-Anmeldung abgeschaltet, neue
+      Verbindung erfolgreich aufgebaut. Rückgängig machen durch Löschen von
+      {{ ssh_keys_sshd_dropin }} und `systemctl reload {{ ssh_keys_sshd_service }}`.
