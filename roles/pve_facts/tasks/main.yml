@@ -62,7 +62,9 @@
     pve_vmid: "{{ pve_matches[0].vmid }}"
     pve_node: "{{ pve_matches[0].node }}"
     pve_type: "{{ pve_matches[0].type }}"
-    pve_status: "{{ pve_matches[0].status }}"
+    # status wird nur für die --vmstate-Entscheidung beim Snapshot gebraucht.
+    # Fehlt es in der Antwort, soll das die Zuordnung nicht scheitern lassen.
+    pve_status: "{{ pve_matches[0].status | default('unknown') }}"
     # pct für Container, qm für VMs
     pve_cli: "{{ 'pct' if pve_matches[0].type == 'lxc' else 'qm' }}"
     # Auf welchem Host die pct/qm-Aufrufe für diesen Gast ausgeführt werden.

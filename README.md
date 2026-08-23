@@ -40,6 +40,7 @@ in Proxmox entspricht, löst Ansible vmid, Node und Typ automatisch über
 
 | Playbook | Zweck | Verändert etwas? |
 |---|---|---|
+| `playbooks/preflight.yml` | Voraussetzungen prüfen, bevor irgendetwas läuft | nein |
 | `playbooks/healthcheck.yml` | Zustand aller Gäste erfassen, Markdown-Report unter `reports/` | nein |
 | `playbooks/maintenance.yml` | Komplette Wartung: Snapshot → Updates → Neustart → Aufräumen | ja |
 | `playbooks/update.yml` | Nur Snapshot + Updates + Neustart | ja |
@@ -47,6 +48,29 @@ in Proxmox entspricht, löst Ansible vmid, Node und Typ automatisch über
 | `playbooks/snapshot.yml` | Nur Snapshots anlegen, sonst nichts | ja (nur Snapshot) |
 | `playbooks/snapshot-prune.yml` | Alte Ansible-Snapshots aufräumen | ja (nur Snapshots) |
 | `playbooks/pve-host-update.yml` | Die PVE-Hosts selbst aktualisieren | ja |
+
+### Vor dem ersten Lauf: Preflight
+
+```bash
+ansible-playbook playbooks/preflight.yml
+```
+
+Prüft in einem Rutsch, ob alles steht, was die übrigen Playbooks voraussetzen,
+und bricht dabei nicht beim ersten Problem ab, sondern sammelt alle Befunde:
+
+- **PVE-Hosts:** sind `pvesh`, `pct`, `qm` und `pveversion` aufrufbar, antwortet
+  `pvesh get /cluster/resources`, und enthält die Antwort die Felder, auf die
+  sich `pve_facts` stützt (`vmid`, `node`, `type`, `name`, `status`)?
+- **Gäste:** Debian/Ubuntu, kommt `become` wirklich als root an, ist
+  `python3-apt` für `--check` vorhanden, und lässt sich der Gast einem
+  Proxmox-Gast zuordnen?
+
+Der Exit-Code ist aussagekräftig: ungleich 0, sobald ein Host Befunde hat.
+Nur berichten statt scheitern geht mit `-e preflight_fail_on_problems=false`.
+
+Der Feldcheck ist bewusst streng, weil die Rollen gegen eine bestimmte Form
+der Cluster-Antwort entwickelt wurden. Weicht deine PVE-Version ab, fällt das
+hier auf und nicht mitten in einem Wartungslauf.
 
 ### Typische Abläufe
 
@@ -169,6 +193,7 @@ inventory/
   hosts.yml                 Hosts und Gruppen
   group_vars/               Einstellungen je Gruppe
 playbooks/                  Die aufrufbaren Playbooks
+  preflight.yml             Voraussetzungscheck vor dem ersten Lauf
 roles/
   pve_facts                 Löst Gäste zu vmid/Node/Typ auf
   pve_snapshot              Snapshot anlegen und alte aufräumen

@@ -1,0 +1,188 @@
+---
+# Prüft vor dem ersten echten Lauf, ob alle Voraussetzungen erfüllt sind.
+# Ändert nichts und bricht nicht beim ersten Problem ab, sondern sammelt alle
+# Befunde ein und meldet sie gebündelt.
+#
+#   ansible-playbook playbooks/preflight.yml
+#
+# Besonders wichtig ist die Prüfung der Cluster-Antwort: Die Rolle `pve_facts`
+# verlässt sich darauf, dass `pvesh get /cluster/resources` die Felder vmid,
+# node, type, name und status liefert. Weicht deine PVE-Version davon ab,
+# fällt das hier auf und nicht mitten in der Wartung.
+
+- name: Voraussetzungen auf den PVE-Hosts prüfen
+  hosts: proxmox
+  become: true
+  gather_facts: true
+  any_errors_fatal: false
+
+  tasks:
+    - name: Benötigte Proxmox-Werkzeuge suchen
+      # Über PATH statt über feste Pfade: das prüft zugleich, ob die Werkzeuge
+      # für den ausführenden Benutzer tatsächlich aufrufbar sind.
+      ansible.builtin.shell:
+        cmd: "command -v {{ item }}"
+      loop:
+        - pvesh
+        - pct
+        - qm
+        - pveversion
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      register: pve_tools
+
+    - name: Fehlende Werkzeuge festhalten
+      ansible.builtin.set_fact:
+        pve_missing_tools: >-
+          {{ pve_tools.results | selectattr('rc', 'ne', 0) | map(attribute='item') | list }}
+
+    - name: Cluster-Ressourcen abfragen
+      ansible.builtin.command:
+        argv: [pvesh, get, /cluster/resources, --type, vm, --output-format, json]
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      register: pre_resources
+
+    - name: Antwort des Clusters auswerten
+      ansible.builtin.set_fact:
+        # Welche der von pve_facts erwarteten Felder fehlen im ersten Eintrag?
+        pre_missing_fields: >-
+          {{ ['vmid', 'node', 'type', 'name', 'status']
+             | reject('in', ((pre_resources.stdout | from_json | first).keys() | list))
+             | list }}
+        pre_guest_count: "{{ pre_resources.stdout | from_json | length }}"
+      when:
+        - pre_resources.rc == 0
+        - (pre_resources.stdout | default('') | trim) | length > 0
+        - (pre_resources.stdout | from_json | length) > 0
+
+    - name: Befunde für diesen PVE-Host sammeln
+      ansible.builtin.set_fact:
+        pre_problems: >-
+          {{ (['Fehlende Werkzeuge: ' ~ (pve_missing_tools | join(', '))]
+              if pve_missing_tools | length > 0 else [])
+             + (['pvesh get /cluster/resources scheitert (rc='
+                 ~ pre_resources.rc ~ '): ' ~ (pre_resources.stderr | default('') | trim)]
+                if pre_resources.rc != 0 else [])
+             + (['Der Cluster meldet keine Gäste — läuft hier wirklich Proxmox?']
+                if (pre_resources.rc == 0 and pre_guest_count | default(0) | int == 0) else [])
+             + (['Der Cluster-Antwort fehlen Felder, die pve_facts braucht: '
+                 ~ (pre_missing_fields | join(', '))]
+                if pre_missing_fields | default([]) | length > 0 else []) }}
+
+    - name: Ergebnis für diesen PVE-Host
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} (PVE-Host):
+          {{ 'OK — ' ~ pre_guest_count | default(0) ~ ' Gast/Gäste sichtbar, Cluster-Antwort passt.'
+             if pre_problems | length == 0
+             else 'PROBLEME: ' ~ (pre_problems | join(' | ')) }}
+
+- name: Voraussetzungen auf den Gästen prüfen
+  hosts: guests
+  become: true
+  gather_facts: true
+  any_errors_fatal: false
+
+  tasks:
+    - name: Proxmox-Zuordnung testen
+      # Scheitert die Zuordnung, soll das hier ein Befund sein und kein Abbruch
+      # des Playbooks — daher block/rescue statt eines harten assert.
+      when: groups['proxmox'] | default([]) | length > 0
+      block:
+        - name: pve_facts anwenden
+          ansible.builtin.include_role:
+            name: pve_facts
+      rescue:
+        - name: Zuordnung ist fehlgeschlagen
+          ansible.builtin.debug:
+            msg: "{{ inventory_hostname }}: Zuordnung zu einem Proxmox-Gast nicht möglich."
+
+    - name: python3-apt suchen (wird für --check benötigt)
+      ansible.builtin.command:
+        argv: ["{{ ansible_python_interpreter | default('/usr/bin/python3') }}", -c, "import apt"]
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      register: pre_python_apt
+
+    - name: Prüfen, ob sudo ohne Passwort funktioniert
+      # Dass dieser Task überhaupt läuft, beweist become bereits — geprüft wird
+      # hier, ob wir tatsächlich als root ankommen.
+      ansible.builtin.command:
+        argv: [id, -u]
+      changed_when: false
+      check_mode: false
+      register: pre_uid
+
+    - name: Befunde für diesen Gast sammeln
+      ansible.builtin.set_fact:
+        pre_problems: >-
+          {{ (['Kein Debian/Ubuntu (os_family=' ~ ansible_facts.os_family ~ ')']
+              if ansible_facts.os_family != 'Debian' else [])
+             + (['Nicht als root angekommen (uid=' ~ (pre_uid.stdout | trim) ~ ') — become/sudo prüfen']
+                if (pre_uid.stdout | trim) != '0' else [])
+             + (['python3-apt fehlt — Läufe mit --check schlagen fehl (apt install python3-apt)']
+                if pre_python_apt.rc != 0 else [])
+             + (['Keine Zuordnung zu einem Proxmox-Gast — pve_vmid im Inventory setzen']
+                if pve_vmid is not defined else []) }}
+
+    - name: Ergebnis für diesen Gast
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}:
+          {{ 'OK — ' ~ pve_type | default('?') ~ '/' ~ pve_vmid | default('?')
+             ~ ', ' ~ ansible_facts.distribution ~ ' ' ~ ansible_facts.distribution_version
+             if pre_problems | length == 0
+             else 'PROBLEME: ' ~ (pre_problems | join(' | ')) }}
+
+- name: Gesamtergebnis
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: false
+
+  vars:
+    preflight_hosts: "{{ (groups['proxmox'] | default([])) + (groups['guests'] | default([])) }}"
+
+  tasks:
+    - name: Hosts mit Befunden auflisten
+      ansible.builtin.debug:
+        msg: "{{ item }} -> {{ hostvars[item].pre_problems | join(' | ') }}"
+      loop: "{{ preflight_hosts }}"
+      when: hostvars[item].pre_problems | default([]) | length > 0
+
+    - name: Nicht erreichte Hosts auflisten
+      ansible.builtin.debug:
+        msg: "{{ item }} -> nicht erreicht oder vorzeitig abgebrochen"
+      loop: "{{ preflight_hosts }}"
+      when: hostvars[item].pre_problems is not defined
+
+    - name: Hosts mit Befunden sammeln
+      # Jinja kann nicht über einen berechneten hostvars-Zugriff filtern,
+      # daher die Liste per Schleife aufbauen. Ein Host ohne `pre_problems`
+      # wurde nie erreicht und zählt ebenfalls als Befund.
+      ansible.builtin.set_fact:
+        preflight_bad: "{{ preflight_bad | default([]) + [item] }}"
+      loop: "{{ preflight_hosts }}"
+      when: hostvars[item].pre_problems | default(['nicht erreicht']) | length > 0
+
+    - name: Leere Liste absichern
+      ansible.builtin.set_fact:
+        preflight_bad: "{{ preflight_bad | default([]) }}"
+
+    - name: Abschluss
+      ansible.builtin.assert:
+        that:
+          - preflight_bad | length == 0
+        success_msg: >-
+          Preflight bestanden: alle {{ preflight_hosts | length }} Host(s) erfüllen
+          die Voraussetzungen.
+        fail_msg: >-
+          Preflight fehlgeschlagen bei {{ preflight_bad | length }} von
+          {{ preflight_hosts | length }} Host(s): {{ preflight_bad | join(', ') }}.
+          Details siehe oben.
+        quiet: true
+      when: preflight_fail_on_problems | default(true) | bool
