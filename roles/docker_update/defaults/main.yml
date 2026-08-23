@@ -1,0 +1,19 @@
+---
+# Docker zwischen den Läufen dieser Rolle auf 'hold' setzen.
+#
+# Hintergrund: `guest_update` fährt ein `apt upgrade` und würde Docker dabei
+# einfach mitnehmen — mitten in einem Wartungslauf, ohne Rücksicht darauf, was
+# gerade an Containern läuft. Mit `hold` bleibt Docker dort außen vor und wird
+# ausschließlich über dieses Playbook aktualisiert, das den Zustand davor und
+# danach vergleicht.
+docker_update_hold: true
+
+# Zielversion. Leer = neueste Version aus dem eingerichteten Repo.
+docker_update_version: ""
+
+# Nach dem Update prüfen, ob alle zuvor laufenden Container wieder laufen.
+docker_update_verify_containers: true
+
+# Wie lange (Sekunden) den Containern nach dem Neustart des Daemons Zeit
+# gegeben wird, bevor der Zustand bewertet wird.
+docker_update_settle_seconds: 15

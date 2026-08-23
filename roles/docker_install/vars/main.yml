@@ -1,0 +1,23 @@
+---
+# Pakete, die einer gesetzten `docker_version` folgen können.
+docker_packages_pinnable:
+  - docker-ce
+  - docker-ce-cli
+
+# Pakete mit eigener Versionierung — werden nie gepinnt.
+docker_packages_unpinnable:
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin
+
+# Zusätzliche Pakete für den rootless-Betrieb.
+#   uidmap            newuidmap/newgidmap für User-Namespaces
+#   dbus-user-session User-D-Bus, ohne den systemd --user unzuverlässig ist
+#   slirp4netns       Netzwerk-Stack ohne root-Rechte
+#   fuse-overlayfs    overlay2 ohne root
+docker_rootless_packages:
+  - docker-ce-rootless-extras
+  - uidmap
+  - dbus-user-session
+  - slirp4netns
+  - fuse-overlayfs

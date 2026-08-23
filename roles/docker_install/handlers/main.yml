@@ -1,0 +1,17 @@
+---
+- name: Docker neu starten
+  ansible.builtin.systemd_service:
+    name: docker
+    state: restarted
+  listen: Docker neu starten
+
+- name: Rootless-Docker neu starten
+  ansible.builtin.systemd_service:
+    name: docker
+    scope: user
+    state: restarted
+  become: true
+  become_user: "{{ docker_rootless_user }}"
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ docker_rootless_uid }}"
+  listen: Rootless-Docker neu starten

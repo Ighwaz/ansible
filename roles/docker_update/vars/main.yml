@@ -1,0 +1,8 @@
+---
+# Pakete, die als "Docker selbst" gelten und von dieser Rolle verwaltet werden.
+docker_update_packages:
+  - docker-ce
+  - docker-ce-cli
+  - containerd.io
+  - docker-buildx-plugin
+  - docker-compose-plugin

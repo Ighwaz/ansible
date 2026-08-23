@@ -1,0 +1,20 @@
+---
+# Aktualisiert Docker selbst — getrennt vom allgemeinen Paket-Update, damit
+# der Neustart des Daemons ein bewusster Schritt bleibt. Erfasst vorher und
+# nachher die laufenden Container und meldet, wenn welche nicht zurückkommen.
+#
+#   ansible-playbook playbooks/docker-update.yml
+#   ansible-playbook playbooks/docker-update.yml --limit vm-build
+#   ansible-playbook playbooks/docker-update.yml -e docker_update_version=5:27.3.1-1~ubuntu.24.04~noble
+
+- name: Docker aktualisieren
+  hosts: docker_hosts
+  become: true
+  gather_facts: true
+  # Nacheinander: ein Docker-Update startet den Daemon neu und damit kurzzeitig
+  # alle Container dieses Hosts.
+  serial: "{{ maint_serial | default(1) }}"
+  max_fail_percentage: "{{ maint_max_fail_percentage | default(100) }}"
+
+  roles:
+    - role: docker_update
