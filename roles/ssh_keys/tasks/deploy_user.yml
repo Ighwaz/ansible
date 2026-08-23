@@ -1,0 +1,76 @@
+---
+# Schreibt die authorized_keys eines einzelnen Zielbenutzers.
+
+- name: Schlüsselliste zusammenstellen für {{ ssh_keys_target.user }}
+  ansible.builtin.set_fact:
+    ssh_keys_for_user: >-
+      {{ (ssh_keys_admin if 'admin' in ssh_keys_target.key_sets else [])
+         + (ssh_keys_automation if 'automation' in ssh_keys_target.key_sets else []) }}
+
+- name: Heimatverzeichnis ermitteln für {{ ssh_keys_target.user }}
+  ansible.builtin.set_fact:
+    ssh_keys_user_home: "{{ ansible_facts.getent_passwd[ssh_keys_target.user][4] }}"
+
+- name: Absicherung für den Verbindungsbenutzer
+  ansible.builtin.include_tasks: guard.yml
+  vars:
+    ssh_keys_connect_home: "{{ ssh_keys_user_home }}"
+    ssh_keys_for_connect_user: "{{ ssh_keys_for_user }}"
+  when: ssh_keys_target.user == ssh_keys_connect_user
+
+- name: SSH-Verzeichnis anlegen für {{ ssh_keys_target.user }}
+  ansible.builtin.file:
+    path: "{{ ssh_keys_user_home }}/.ssh"
+    state: directory
+    owner: "{{ ssh_keys_target.user }}"
+    group: "{{ ssh_keys_target.user }}"
+    mode: "0700"
+
+- name: Datei authorized_keys schreiben für {{ ssh_keys_target.user }}
+  ansible.builtin.template:
+    src: authorized_keys.j2
+    dest: "{{ ssh_keys_user_home }}/.ssh/authorized_keys"
+    owner: "{{ ssh_keys_target.user }}"
+    group: "{{ ssh_keys_target.user }}"
+    mode: "0600"
+    # sshd verweigert den Dienst bei falschen Rechten, ohne das zu erklären —
+    # eine kaputte Datei waere schlimmer als eine fehlende.
+    validate: "test -r %s"
+  when: ssh_keys_exclusive | bool
+
+- name: Schlüssel ergänzen für {{ ssh_keys_target.user }}
+  ansible.builtin.lineinfile:
+    path: "{{ ssh_keys_user_home }}/.ssh/authorized_keys"
+    line: "{{ item.key | trim }} {{ item.name }}"
+    regexp: "^{{ item.key | trim | regex_escape }}"
+    create: true
+    owner: "{{ ssh_keys_target.user }}"
+    group: "{{ ssh_keys_target.user }}"
+    mode: "0600"
+  loop: "{{ ssh_keys_for_user }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: not (ssh_keys_exclusive | bool)
+
+- name: Geschriebene authorized_keys überprüfen für {{ ssh_keys_target.user }}
+  # Nicht bloß Formsache: eine Datei, in der die Schlüssel versehentlich
+  # auskommentiert oder verstümmelt sind, sieht auf den ersten Blick richtig
+  # aus, gewährt aber niemandem Zugang. Zusammen mit abgeschalteter
+  # Passwort-Anmeldung ist das der vollständige Aussperr-Fall.
+  # ssh-keygen liest die Datei so, wie sshd es täte.
+  ansible.builtin.command:
+    argv: [ssh-keygen, -l, -f, "{{ ssh_keys_user_home }}/.ssh/authorized_keys"]
+  changed_when: false
+  check_mode: false
+  register: ssh_keys_verify
+
+- name: Anzahl der erkannten Schlüssel abgleichen für {{ ssh_keys_target.user }}
+  ansible.builtin.assert:
+    that:
+      - ssh_keys_verify.stdout_lines | length == ssh_keys_for_user | length
+    fail_msg: >-
+      In {{ ssh_keys_user_home }}/.ssh/authorized_keys erkennt ssh-keygen
+      {{ ssh_keys_verify.stdout_lines | length }} Schlüssel, konfiguriert sind
+      aber {{ ssh_keys_for_user | length }}. Die Datei ist unbrauchbar —
+      bitte den Inhalt prüfen, bevor die Passwort-Anmeldung abgeschaltet wird.
+    quiet: true

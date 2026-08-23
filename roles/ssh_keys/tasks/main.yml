@@ -1,0 +1,71 @@
+---
+# Rollt öffentliche SSH-Schlüssel aus und schaltet auf Wunsch die
+# Passwort-Anmeldung ab — letzteres erst, nachdem geprüft ist, dass die
+# Schlüssel tragen.
+
+- name: Mindestens einen Schlüssel verlangen
+  ansible.builtin.assert:
+    that:
+      - ssh_keys_admin | length > 0
+    fail_msg: >-
+      `ssh_keys_admin` ist leer. Ohne Schlüssel würde diese Rolle bei
+      exklusiver Verwaltung sämtliche authorized_keys leeren und damit jeden
+      Zugang entfernen.
+    quiet: true
+
+- name: Aufbau der Schlüsseleinträge prüfen
+  ansible.builtin.assert:
+    that:
+      - item.name is defined
+      - item.key is defined
+      - item.key is match('^(ssh-|ecdsa-)')
+    fail_msg: >-
+      Ungültiger Eintrag in ssh_keys_admin/ssh_keys_automation:
+      {{ item }} — erwartet werden `name` und `key`, wobei `key` ein
+      öffentlicher Schlüssel ist (beginnt mit ssh- oder ecdsa-).
+      Private Schlüssel gehören nicht hierher.
+    quiet: true
+  loop: "{{ ssh_keys_admin + ssh_keys_automation }}"
+  loop_control:
+    label: "{{ item.name | default('ohne Namen') }}"
+
+- name: Benutzer ermitteln, als der Ansible verbunden ist
+  ansible.builtin.command:
+    argv: [id, -un]
+  changed_when: false
+  check_mode: false
+  # Ohne become, sonst käme immer 'root' heraus statt des Anmeldebenutzers.
+  become: false
+  register: ssh_keys_whoami
+
+- name: Verbindungsbenutzer und dessen Heimatverzeichnis merken
+  ansible.builtin.set_fact:
+    ssh_keys_connect_user: "{{ ssh_keys_whoami.stdout | trim }}"
+
+- name: Heimatverzeichnisse der Zielbenutzer nachschlagen
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ item.user }}"
+  loop: "{{ ssh_keys_targets }}"
+  loop_control:
+    label: "{{ item.user }}"
+
+- name: Ausrollen je Zielbenutzer
+  ansible.builtin.include_tasks: deploy_user.yml
+  loop: "{{ ssh_keys_targets }}"
+  loop_control:
+    loop_var: ssh_keys_target
+    label: "{{ ssh_keys_target.user }}"
+
+- name: Dienst sshd härten
+  ansible.builtin.include_tasks: harden.yml
+  when: ssh_keys_disable_password_auth | bool
+
+- name: Ergebnis melden
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: {{ ssh_keys_admin | length }} Admin-Schlüssel
+      auf {{ ssh_keys_targets | map(attribute='user') | join(', ') }} ausgerollt
+      ({{ 'exklusiv' if ssh_keys_exclusive | bool else 'ergänzend' }}).
+      {{ 'Passwort-Anmeldung ist abgeschaltet.'
+         if ssh_keys_disable_password_auth | bool else '' }}

@@ -52,6 +52,7 @@ in Proxmox entspricht, löst Ansible vmid, Node und Typ automatisch über
 | `playbooks/docker-update.yml` | Docker selbst aktualisieren, mit Container-Kontrolle | ja |
 | `playbooks/icinga-setup.yml` | Icinga2-Stack aufsetzen und Gäste vorbereiten | ja |
 | `playbooks/icinga-config.yml` | Prüfungen aus dem Inventory neu erzeugen | ja |
+| `playbooks/ssh-keys.yml` | SSH-Schlüssel ausrollen, optional sshd härten | ja |
 
 ### Vor dem ersten Lauf: Preflight
 
@@ -269,6 +270,86 @@ Konkret entsteht dadurch neben der Prüfung `ping` noch ein `ping4` je Host.
 Doppelte Prüfungen stören nicht, kosten aber Platz in der Oberfläche — wer sie
 loswerden will, entfernt die Beispieldateien im Volume `icinga2-data`.
 
+## SSH-Schlüssel
+
+Öffentliche Schlüssel stehen in `inventory/group_vars/all.yml`. Der Name je
+Eintrag landet als Kommentar in der `authorized_keys` und macht später
+eindeutig, welcher Schlüssel zu welchem Gerät gehört.
+
+```yaml
+ssh_keys_admin:
+  - name: laptop
+    key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... tofa@laptop"
+
+# Der Schlüssel, mit dem Ansible selbst arbeitet
+ssh_keys_automation:
+  - name: ansible
+    key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... ansible@controller"
+```
+
+**Nur öffentliche Schlüssel.** Private gehören niemals ins Repository.
+
+```bash
+ansible-playbook playbooks/ssh-keys.yml --check     # erst ansehen
+ansible-playbook playbooks/ssh-keys.yml
+```
+
+Ausgerollt wird an den Ansible-Benutzer und an `root`; wer was bekommt, regelt
+`ssh_keys_targets`.
+
+### Widerruf
+
+Die `authorized_keys` wird **vollständig** verwaltet (`ssh_keys_exclusive`).
+Erst dadurch ist ein Widerruf möglich: Eintrag aus `ssh_keys_admin` entfernen,
+Playbook laufen lassen — der Schlüssel ist flottenweit weg. Von Hand
+hinzugefügte Schlüssel verschwinden damit allerdings ebenfalls.
+
+### Schutz gegen das Aussperren
+
+Genau hier geht es schief, und zwar endgültig. Drei Sicherungen greifen:
+
+1. **Vor dem Schreiben** prüft die Rolle für den Benutzer, als der Ansible
+   gerade verbunden ist, ob mindestens einer der bisherigen Schlüssel auch in
+   der neuen Liste steht. Ist das nicht der Fall, bricht der Lauf ab, ohne die
+   Datei anzufassen — sonst würde er den eigenen Zugang entfernen. Bewusst
+   übergehen mit `-e ssh_keys_force=true`.
+2. **Nach dem Schreiben** liest `ssh-keygen -l -f` die Datei so, wie sshd es
+   täte, und gleicht die Anzahl erkannter Schlüssel mit der Konfiguration ab.
+   Eine Datei, in der die Schlüssel versehentlich auskommentiert sind, sieht
+   auf den ersten Blick richtig aus — gewährt aber niemandem Zugang.
+3. **Der Ansible-Automatisierungsschlüssel** gehört in `ssh_keys_automation`.
+   Fehlt er dort, entfernt ihn der exklusive Lauf; Sicherung 1 fängt das ab.
+
+### Härtung von sshd
+
+`ssh_keys_disable_password_auth: true` schaltet die Passwort-Anmeldung ab.
+Standardmäßig aus: erst ausrollen und überprüfen, dann härten.
+
+Vier Bedingungen müssen erfüllt sein, sonst bricht die Rolle ab, ohne etwas
+zu ändern:
+
+- Ansible ist **nicht** selbst per Passwort verbunden — sonst sperrt der Lauf
+  die Automatisierung mit sich selbst aus
+- sshd läuft überhaupt
+- `sshd_config` bindet `/etc/ssh/sshd_config.d/` ein, die Drop-in-Datei wäre
+  sonst wirkungslos und die Härtung nur scheinbar aktiv
+- `sshd -t` akzeptiert die Konfiguration — die Prüfung läuft **vor** dem
+  Schreiben, eine ungültige Datei entsteht gar nicht erst
+
+Anschließend wird `reload` statt `restart` verwendet: bestehende Sitzungen
+bleiben offen und damit als Rettungsanker erhalten. Danach setzt die Rolle die
+Verbindung zurück und baut eine **frische** auf — nur die beweist, dass die
+neue Konfiguration trägt.
+
+Rückgängig machen heißt, eine Datei zu löschen:
+
+```bash
+rm /etc/ssh/sshd_config.d/60-ansible-hardening.conf && systemctl reload ssh
+```
+
+`PermitRootLogin` wird bewusst nicht angefasst. Ein falscher Wert dort nimmt
+den root-Zugang, der bei kaputtem sudo die letzte Rückfallebene ist.
+
 ## Wichtige Variablen
 
 Zu setzen in `inventory/group_vars/guests.yml`, pro Host im Inventory oder
@@ -383,4 +464,5 @@ roles/
   icinga_server             Icinga2-Stack als Docker-Verbund
   icinga_remote             Monitoring-Zugang und Plugins auf den Gästen
   icinga_config             Host-/Service-Definitionen aus dem Inventory
+  ssh_keys                  Schlüssel ausrollen, optional sshd härten
 ```

@@ -1,0 +1,80 @@
+---
+# Absicherung gegen den klassischen Fehler beim exklusiven Verwalten von
+# authorized_keys: der Lauf entfernt genau den Schlüssel, mit dem Ansible
+# gerade verbunden ist — und der nächste Lauf kommt nicht mehr herein.
+#
+# Geprüft wird nur der Benutzer, als der Ansible sich tatsächlich anmeldet.
+# Bei allen anderen ist ein Fehlgriff ärgerlich, aber reparabel.
+
+- name: Vorhandene authorized_keys des Verbindungsbenutzers lesen
+  ansible.builtin.slurp:
+    src: "{{ ssh_keys_connect_home }}/.ssh/authorized_keys"
+  register: ssh_keys_existing_raw
+  failed_when: false
+
+- name: Bisherige Schlüssel aufbereiten
+  ansible.builtin.set_fact:
+    # Nur der eigentliche Schlüsselteil zählt (Typ + Material). Kommentare und
+    # Optionen bleiben außen vor, sonst gilt derselbe Schlüssel mit geändertem
+    # Kommentar fälschlich als anderer.
+    ssh_keys_existing: >-
+      {{ (ssh_keys_existing_raw.content | default('') | b64decode).split('\n')
+         | map('trim')
+         | reject('match', '^#')
+         | reject('equalto', '')
+         | map('regex_replace', '^.*?(ssh-[a-z0-9-]+|ecdsa-[a-z0-9-]+)\s+(\S+).*$', '\1 \2')
+         | list }}
+
+- name: Künftige Schlüssel des Verbindungsbenutzers aufbereiten
+  ansible.builtin.set_fact:
+    ssh_keys_future: >-
+      {{ ssh_keys_for_connect_user
+         | map(attribute='key')
+         | map('trim')
+         | map('regex_replace', '^(ssh-[a-z0-9-]+|ecdsa-[a-z0-9-]+)\s+(\S+).*$', '\1 \2')
+         | list }}
+
+- name: Überschneidung bestimmen
+  ansible.builtin.set_fact:
+    ssh_keys_kept: "{{ ssh_keys_existing | intersect(ssh_keys_future) }}"
+
+- name: Aussperren verhindern
+  ansible.builtin.fail:
+    msg: >-
+      ABBRUCH auf {{ inventory_hostname }}: Die authorized_keys von
+      '{{ ssh_keys_connect_user }}' enthält derzeit
+      {{ ssh_keys_existing | length }} Schlüssel, und KEINER davon steht in der
+      neuen Liste. Ansible ist als genau dieser Benutzer verbunden — der Lauf
+      würde den eigenen Zugang entfernen und der nächste Lauf käme nicht mehr
+      herein.
+      Entweder den Automatisierungsschlüssel in `ssh_keys_automation`
+      aufnehmen, oder — wenn das beabsichtigt ist und ein anderer Zugang
+      gesichert bereitsteht — den Lauf mit `-e ssh_keys_force=true`
+      wiederholen.
+  when:
+    - ssh_keys_exclusive | bool
+    - not (ssh_keys_force | bool)
+    - ssh_keys_existing | length > 0
+    - ssh_keys_kept | length == 0
+
+- name: Zu entfernende Schlüssel melden
+  ansible.builtin.debug:
+    msg: "{{ ssh_keys_removal_prefix }}: {{ ssh_keys_removal_text }} {{ ssh_keys_removal_note }}"
+  vars:
+    ssh_keys_removal_prefix: "{{ 'HINWEIS' if ssh_keys_kept | length > 0 else 'ACHTUNG' }}"
+    ssh_keys_removal_text: >-
+      Auf {{ inventory_hostname }} werden bei '{{ ssh_keys_connect_user }}'
+      {{ (ssh_keys_existing | difference(ssh_keys_future)) | length }} bisher
+      vorhandene(r) Schlüssel entfernt.
+    ssh_keys_removal_kept: >-
+      {{ ssh_keys_kept | length }} bisheriger Schlüssel bleibt erhalten,
+      der Zugang ist damit gesichert.
+    ssh_keys_removal_warn: >-
+      KEIN bisheriger Schlüssel bleibt erhalten — der Zugang hängt ab jetzt
+      allein an den neu ausgerollten Schlüsseln. Vor dem Trennen dieser
+      Verbindung unbedingt eine zweite Sitzung damit testen.
+    ssh_keys_removal_note: >-
+      {{ ssh_keys_removal_kept if ssh_keys_kept | length > 0 else ssh_keys_removal_warn }}
+  when:
+    - ssh_keys_exclusive | bool
+    - (ssh_keys_existing | difference(ssh_keys_future)) | length > 0
