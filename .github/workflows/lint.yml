@@ -30,9 +30,16 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          # Ohne diese Zeile sucht setup-python nur nach **/requirements.txt
+          # bzw. **/pyproject.toml und bricht ab, wenn nichts davon existiert.
+          cache-dependency-path: requirements-dev.txt
 
       - name: Werkzeuge installieren
-        run: python -m pip install --upgrade pip yamllint ansible-lint
+        # Versionen stehen gepinnt in requirements-dev.txt — dieselbe Datei,
+        # die auch der pip-Cache oben als Schlüssel verwendet.
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
 
       - name: Versionen protokollieren
         # Steht im Log, damit sich ein Fehlschlag später einer Version

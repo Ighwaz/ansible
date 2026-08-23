@@ -194,10 +194,15 @@ und ein `--syntax-check` über alle Playbooks.
 Lokal derselbe Lauf:
 
 ```bash
-pip install yamllint ansible-lint
+pip install -r requirements-dev.txt
 yamllint --strict .
 ansible-lint --offline
 ```
+
+Die Werkzeugversionen stehen in `requirements-dev.txt` auf Patch-Ebene
+gepinnt. `ansible-lint` bringt mit neuen Minor-Versionen regelmäßig
+zusätzliche Regeln mit — die sollen die CI nicht unvermittelt rot färben,
+sondern beim bewussten Anheben des Pins auffallen.
 
 `ansible-lint` ist auf das Profil `production` festgenagelt — das strengste
 Profil, das das Repo aktuell erfüllt. Zwei Regeln sind in `.ansible-lint`
