@@ -1,0 +1,25 @@
+---
+# Grundeinrichtung eines Proxmox-Nodes: Paketquellen, Zeit und Sprache,
+# Basispakete, Sicherungsvorgaben.
+#
+#   ansible-playbook playbooks/pve-node-setup.yml --check     # erst ansehen
+#   ansible-playbook playbooks/pve-node-setup.yml --limit pve02
+#
+# Bewusst NICHT enthalten:
+#   - Cluster-Beitritt (`pvecm add`) — ein Fehlgriff dort beschädigt einen
+#     bestehenden Cluster
+#   - Anlegen von Storage — das berührt Datenträger
+# Beides bleibt manuell. Die Rolle meldet lediglich, wenn ein erwartetes
+# Storage fehlt.
+
+- name: Proxmox-Node einrichten
+  hosts: proxmox
+  become: true
+  gather_facts: true
+  # Nacheinander: bei mehreren Nodes soll ein Fehler auf dem ersten auffallen,
+  # bevor die übrigen angefasst werden.
+  serial: 1
+  max_fail_percentage: "{{ maint_max_fail_percentage | default(100) }}"
+
+  roles:
+    - role: pve_node_setup

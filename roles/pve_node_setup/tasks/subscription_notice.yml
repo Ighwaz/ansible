@@ -1,0 +1,90 @@
+---
+# Blendet den Hinweis „Sie haben kein gültiges Abonnement" nach dem Anmelden
+# im Webinterface aus.
+#
+# Das verändert eine von Proxmox mitgelieferte Datei. Zwei Dinge dazu:
+#   - Ein Update von proxmox-widget-toolkit setzt die Änderung zurück; ein
+#     erneuter Lauf dieser Rolle stellt sie wieder her.
+#   - Die Änderung ist mit einem Kommentar markiert. Dadurch ist sie
+#     wiedererkennbar, der Lauf idempotent und im Nachhinein nachvollziehbar.
+
+- name: Datei des Webinterface suchen
+  ansible.builtin.stat:
+    path: "{{ pve_setup_widget_toolkit }}"
+  register: pve_setup_widget_file
+
+- name: Fehlende Datei melden
+  ansible.builtin.debug:
+    msg: >-
+      HINWEIS: {{ pve_setup_widget_toolkit }} existiert auf
+      {{ inventory_hostname }} nicht. Der Abo-Hinweis wurde nicht angefasst.
+  when: not pve_setup_widget_file.stat.exists
+
+- name: Anpassung vornehmen
+  when: pve_setup_widget_file.stat.exists
+  block:
+
+    - name: Aktuellen Zustand der Datei ermitteln
+      ansible.builtin.command:
+        argv: [grep, -c, "{{ pve_setup_notice_marker }}", "{{ pve_setup_widget_toolkit }}"]
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      register: pve_setup_notice_patched
+
+    - name: Vorhandensein des erwarteten Musters prüfen
+      ansible.builtin.command:
+        argv: [grep, -c, "{{ pve_setup_notice_probe }}", "{{ pve_setup_widget_toolkit }}"]
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      register: pve_setup_notice_original
+
+    - name: Unerwarteten Aufbau melden
+      # Weder das Muster noch die Markierung gefunden: die Datei sieht anders
+      # aus als erwartet, vermutlich wegen einer neueren Proxmox-Fassung.
+      # Ein Abbruch wäre hier unangemessen — der Hinweis ist kosmetisch.
+      ansible.builtin.debug:
+        msg: >-
+          HINWEIS: In {{ pve_setup_widget_toolkit }} wurde weder das erwartete
+          Muster noch eine frühere Anpassung gefunden. Vermutlich hat sich der
+          Aufbau der Datei mit einer neueren Proxmox-Fassung geändert. Der
+          Abo-Hinweis bleibt unverändert eingeblendet.
+      when:
+        - pve_setup_notice_patched.rc != 0
+        - pve_setup_notice_original.rc != 0
+
+    - name: Abo-Hinweis ausblenden
+      # Ersetzt die gesamte Bedingung durch `false`. Die alte Fassung bleibt
+      # als Sicherungskopie daneben liegen.
+      ansible.builtin.replace:
+        path: "{{ pve_setup_widget_toolkit }}"
+        regexp: "{{ pve_setup_notice_regex }}"
+        replace: "false /* {{ pve_setup_notice_marker }} */"
+        backup: true
+      when: pve_setup_notice_original.rc == 0
+      register: pve_setup_notice_applied
+      notify: Dienst pveproxy neu starten
+
+    - name: Erfolg der Anpassung bestätigen
+      # Das Erkennungsmerkmal war da, der Ausdruck ringsum aber womöglich
+      # anders aufgebaut — dann hätte das Ersetzen nichts getan und still
+      # nichts bewirkt. Also nachsehen, ob die Markierung wirklich drinsteht.
+      ansible.builtin.command:
+        argv: [grep, -c, "{{ pve_setup_notice_marker }}", "{{ pve_setup_widget_toolkit }}"]
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      register: pve_setup_notice_final
+      when: pve_setup_notice_original.rc == 0
+
+    - name: Wirkungslose Anpassung melden
+      ansible.builtin.debug:
+        msg: >-
+          HINWEIS: Das Erkennungsmerkmal war in {{ pve_setup_widget_toolkit }}
+          vorhanden, der Ausdruck ringsum sieht aber anders aus als erwartet —
+          die Anpassung hat nichts bewirkt. Der Abo-Hinweis bleibt eingeblendet.
+          Die Datei selbst wurde nicht verändert.
+      when:
+        - pve_setup_notice_original.rc == 0
+        - pve_setup_notice_final.rc | default(1) != 0

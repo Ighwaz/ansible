@@ -1,0 +1,13 @@
+---
+# Standardwerte für vzdump. Betrifft alle Sicherungsaufträge dieses Nodes,
+# die keine eigenen Werte mitbringen.
+
+- name: Vorgaben für Sicherungen schreiben
+  ansible.builtin.template:
+    src: vzdump.conf.j2
+    dest: /etc/vzdump.conf
+    owner: root
+    group: root
+    mode: "0644"
+    backup: true
+  register: pve_setup_vzdump_conf

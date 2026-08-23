@@ -1,0 +1,36 @@
+# Von Ansible verwaltet — Änderungen werden beim nächsten Lauf überschrieben.
+#
+# Gilt als Vorgabe für alle Sicherungsaufträge dieses Nodes, die keine eigenen
+# Werte mitbringen. Ein Auftrag mit eigenen Einstellungen sticht diese hier.
+{% if pve_setup_vzdump_storage | length > 0 %}
+
+storage: {{ pve_setup_vzdump_storage }}
+{% endif %}
+
+mode: {{ pve_setup_vzdump_mode }}
+compress: {{ pve_setup_vzdump_compress }}
+{% if pve_setup_vzdump_bwlimit | int > 0 %}
+
+# Bandbreitenbegrenzung in KB/s — verhindert, dass eine Sicherung das Netz
+# oder das Storage für alles andere blockiert.
+bwlimit: {{ pve_setup_vzdump_bwlimit }}
+{% endif %}
+{% set prune = [] %}
+{% if pve_setup_vzdump_keep_last | string | length > 0 %}
+{% set _ = prune.append('keep-last=' ~ pve_setup_vzdump_keep_last) %}
+{% endif %}
+{% if pve_setup_vzdump_keep_daily | string | length > 0 %}
+{% set _ = prune.append('keep-daily=' ~ pve_setup_vzdump_keep_daily) %}
+{% endif %}
+{% if pve_setup_vzdump_keep_weekly | string | length > 0 %}
+{% set _ = prune.append('keep-weekly=' ~ pve_setup_vzdump_keep_weekly) %}
+{% endif %}
+{% if pve_setup_vzdump_keep_monthly | string | length > 0 %}
+{% set _ = prune.append('keep-monthly=' ~ pve_setup_vzdump_keep_monthly) %}
+{% endif %}
+{% if prune | length > 0 %}
+
+# Aufbewahrung. prune-backups löst das frühere maxfiles ab und erlaubt
+# gestaffelte Aufbewahrung statt einer reinen Höchstzahl.
+prune-backups: {{ prune | join(',') }}
+{% endif %}
