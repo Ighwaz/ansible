@@ -7,7 +7,14 @@ rules:
     level: warning
   truthy:
     allowed-values: ["true", "false"]
+    # GitHub Actions verlangt den Schlüssel `on:`, den YAML als Boolean liest.
+    # Schlüssel daher ausnehmen; für Werte bleibt die Prüfung aktiv.
+    check-keys: false
   comments-indentation: disable
+  comments:
+    # ansible-lint erwartet genau diesen Wert; der yamllint-Standard (2) gilt
+    # dort als inkompatibel und schaltet den Fix-Modus ab.
+    min-spaces-from-content: 1
   braces:
     max-spaces-inside: 1
   octal-values:

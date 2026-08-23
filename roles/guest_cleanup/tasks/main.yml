@@ -81,8 +81,9 @@
   block:
 
     - name: Prüfen, ob Docker installiert ist
-      # `command -v` ist ein Shell-Builtin und braucht daher shell statt command.
-      ansible.builtin.shell:
+      # `command -v` ist ein Shell-Builtin — es gibt kein /usr/bin/command,
+      # daher ist shell hier zwingend und nicht durch command ersetzbar.
+      ansible.builtin.shell:  # noqa: command-instead-of-shell
         cmd: command -v docker
       changed_when: false
       failed_when: false

@@ -185,9 +185,40 @@ fehlt es, hilft `apt install python3-apt`.
 (Dateisysteme, RAM, ausstehende Updates, fehlgeschlagene systemd-Units).
 Das Verzeichnis `reports/` ist bewusst nicht eingecheckt.
 
+## Codequalität
+
+Jeder Push auf `main` und jeder Pull Request dagegen wird von GitHub Actions
+geprüft (`.github/workflows/lint.yml`): `yamllint --strict`, `ansible-lint`
+und ein `--syntax-check` über alle Playbooks.
+
+Lokal derselbe Lauf:
+
+```bash
+pip install -r requirements-dev.txt
+yamllint --strict .
+ansible-lint --offline
+```
+
+Die Werkzeugversionen stehen in `requirements-dev.txt` auf Patch-Ebene
+gepinnt. `ansible-lint` bringt mit neuen Minor-Versionen regelmäßig
+zusätzliche Regeln mit — die sollen die CI nicht unvermittelt rot färben,
+sondern beim bewussten Anheben des Pins auffallen.
+
+`ansible-lint` ist auf das Profil `production` festgenagelt — das strengste
+Profil, das das Repo aktuell erfüllt. Zwei Regeln sind in `.ansible-lint`
+bewusst abgeschaltet, jeweils mit Begründung an Ort und Stelle:
+
+- **`var-naming[no-role-prefix]`** — die Regel setzt voraus, dass Rollen
+  unabhängige Einheiten sind. Hier teilen sie sich absichtlich Variablen
+  (`maint_*`), und Namen wie `pve_snapshot_keep` sind die dokumentierte
+  Bedienoberfläche.
+- **`run-once`** — warnt vor `strategy: free`, die hier nirgends verwendet
+  wird. `run_once` ist an jeder Stelle beabsichtigt.
+
 ## Aufbau
 
 ```
+.github/workflows/          CI: yamllint, ansible-lint, Syntax-Check
 ansible.cfg                 Grundeinstellungen
 inventory/
   hosts.yml                 Hosts und Gruppen
