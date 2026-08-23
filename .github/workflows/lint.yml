@@ -1,0 +1,62 @@
+---
+name: Lint
+
+# Läuft bei jedem Push auf main und bei jedem Pull Request dagegen.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Zwei Läufe auf denselben Branch sind sinnlos — der ältere wird abgebrochen.
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: yamllint + ansible-lint
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: Python einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Werkzeuge installieren
+        run: python -m pip install --upgrade pip yamllint ansible-lint
+
+      - name: Versionen protokollieren
+        # Steht im Log, damit sich ein Fehlschlag später einer Version
+        # zuordnen lässt, wenn ansible-lint neue Regeln mitbringt.
+        run: |
+          yamllint --version
+          ansible-lint --version
+
+      - name: yamllint
+        run: yamllint --strict .
+
+      - name: ansible-lint
+        # --offline verhindert, dass der Lauf Collections nachlädt; alles
+        # Nötige liegt im Repo.
+        run: ansible-lint --offline
+
+      - name: Syntax-Check aller Playbooks
+        # Ergänzt das Linting: ansible-lint prüft Stil und Muster,
+        # --syntax-check prüft, ob Ansible die Playbooks überhaupt laden kann.
+        run: |
+          status=0
+          for playbook in playbooks/*.yml; do
+            echo "::group::${playbook}"
+            ansible-playbook --syntax-check "${playbook}" || status=1
+            echo "::endgroup::"
+          done
+          exit "${status}"

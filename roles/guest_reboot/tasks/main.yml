@@ -29,7 +29,7 @@
         - lxc_reboot_via_host | bool
       block:
 
-        - name: pct reboot auslösen
+        - name: Neustart über pct reboot auslösen
           ansible.builtin.command:
             argv:
               - pct

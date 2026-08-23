@@ -1,0 +1,40 @@
+---
+# Konfiguration für ansible-lint.
+# Die CI führt zusätzlich yamllint aus (siehe .github/workflows/lint.yml).
+
+# Das Repo erfüllt aktuell das strengste Profil. Festgepinnt, damit die CI
+# dieses Niveau hält und ein Absinken auffällt, statt unbemerkt zu passieren.
+profile: production
+
+exclude_paths:
+  - collections/        # per requirements installierte Fremd-Rollen
+  - reports/            # erzeugte Health-Reports
+  - .facts_cache/       # Fakten-Cache zur Laufzeit
+
+skip_list:
+  # ------------------------------------------------------------------------
+  # var-naming[no-role-prefix]
+  #
+  # Die Regel erwartet, dass Variablen einer Rolle mit deren Namen beginnen
+  # (in `pve_host_update` also `pve_host_update_*`). Das setzt voraus, dass
+  # Rollen unabhängige Einheiten sind — hier sind sie es bewusst nicht:
+  #
+  #   - `maint_*` und `guest_apt_lock_timeout` werden absichtlich von mehreren
+  #     Rollen geteilt; ein Rollenpräfix wäre schlicht falsch.
+  #   - Variablen wie `pve_snapshot_keep` oder `guest_upgrade_type` sind die
+  #     dokumentierte Bedienoberfläche aus der README. Ein Umbenennen zu
+  #     `pve_host_update_pve_manage_repos` verschlechtert sie.
+  #
+  # Die übrigen var-naming-Regeln (snake_case, keine reservierten Namen)
+  # bleiben aktiv.
+  - var-naming[no-role-prefix]
+
+  # ------------------------------------------------------------------------
+  # run-once
+  #
+  # Die Regel warnt, dass `run_once` sich mit `strategy: free` anders verhält.
+  # Kein Playbook hier setzt eine andere Strategie als die Voreinstellung
+  # `linear`, und `run_once` ist an jeder Stelle beabsichtigt: die Lauf-ID
+  # muss für alle Hosts identisch sein, und der Health-Report fasst alle
+  # Hosts zusammen und darf daher genau einmal geschrieben werden.
+  - run-once

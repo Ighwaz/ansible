@@ -23,7 +23,7 @@
   failed_when: false
   register: guest_newest_kernel
 
-- name: needrestart auswerten, falls vorhanden
+- name: Ausgabe von needrestart auswerten, falls vorhanden
   ansible.builtin.shell:
     cmd: |
       set -o pipefail
