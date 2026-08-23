@@ -1,12 +1,17 @@
 ---
 name: Lint
 
-# Läuft bei jedem Push auf main und bei jedem Pull Request dagegen.
+# Läuft bei jedem Push auf main und bei JEDEM Pull Request.
+#
+# Der pull_request-Auslöser ist bewusst ohne branches-Filter: mit
+# `branches: [main]` bekam ein gestapelter PR — einer, der gegen einen anderen
+# Feature-Branch gestellt ist statt gegen main — überhaupt keine Prüfung. Der
+# Fehler fiel nicht auf, weil ein fehlender Lauf keinen roten Haken erzeugt,
+# sondern gar keinen.
 on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 # Zwei Läufe auf denselben Branch sind sinnlos — der ältere wird abgebrochen.
 concurrency:

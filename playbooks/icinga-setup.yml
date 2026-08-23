@@ -1,0 +1,43 @@
+---
+# Richtet das Monitoring vollständig ein:
+#   1. Icinga-Stack auf dem Monitoring-Host (erzeugt dabei den SSH-Schlüssel)
+#   2. Monitoring-Zugang und Plugins auf allen Gästen
+#   3. Host- und Service-Definitionen aus dem Inventory
+#
+#   ansible-playbook playbooks/icinga-setup.yml
+#
+# Der Monitoring-Host muss Docker haben — vorher playbooks/docker-setup.yml.
+
+- name: Icinga-Stack aufsetzen
+  hosts: monitoring
+  become: true
+  gather_facts: true
+  max_fail_percentage: "{{ maint_max_fail_percentage | default(100) }}"
+
+  roles:
+    - role: icinga_server
+
+- name: Gäste für das Monitoring vorbereiten
+  hosts: guests
+  become: true
+  gather_facts: true
+  max_fail_percentage: "{{ maint_max_fail_percentage | default(100) }}"
+
+  vars:
+    # Aus dem ersten Play übernommen: der öffentliche Schlüssel wird dort
+    # erzeugt und muss hier auf jedem Gast hinterlegt werden.
+    icinga_monitoring_host: "{{ groups['monitoring'] | default([]) | first }}"
+    icinga_ssh_public_key: "{{ hostvars[icinga_monitoring_host].icinga_ssh_public_key | default('') }}"
+    icinga_master_address: "{{ hostvars[icinga_monitoring_host].icinga_master_resolved_address | default('') }}"
+
+  roles:
+    - role: icinga_remote
+
+- name: Prüfungen aus dem Inventory erzeugen
+  hosts: monitoring
+  become: true
+  gather_facts: false
+  max_fail_percentage: "{{ maint_max_fail_percentage | default(100) }}"
+
+  roles:
+    - role: icinga_config

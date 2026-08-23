@@ -1,0 +1,162 @@
+---
+# Setzt den Icinga2-Stack als Docker-Compose-Verbund auf dem Monitoring-Host
+# auf und erzeugt das SSH-Schlüsselpaar, mit dem check_by_ssh die Gäste
+# erreicht.
+
+- name: Docker-Verfügbarkeit prüfen
+  ansible.builtin.command:
+    argv: [docker, compose, version]
+  changed_when: false
+  failed_when: false
+  register: icinga_docker_probe
+
+- name: Abbruch, wenn Docker Compose fehlt
+  ansible.builtin.assert:
+    that:
+      - icinga_docker_probe.rc == 0
+    fail_msg: >-
+      Auf {{ inventory_hostname }} ist `docker compose` nicht verfügbar.
+      Zuerst playbooks/docker-setup.yml gegen diesen Host laufen lassen —
+      der Icinga-Stack läuft als Container.
+    quiet: true
+
+- name: Verzeichnisse anlegen
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  loop:
+    - {path: "{{ icinga_base_dir }}", mode: "0750"}
+    - {path: "{{ icinga_base_dir }}/ssh", mode: "0700"}
+    - {path: "{{ icinga_base_dir }}/conf.d", mode: "0755"}
+  loop_control:
+    label: "{{ item.path }}"
+
+# --- Zugangsdaten -----------------------------------------------------------
+
+- name: Zugangsdaten erzeugen
+  # `creates` sorgt dafür, dass das genau einmal passiert. Würden die
+  # Passwörter bei jedem Lauf neu erzeugt, käme der Stack nach dem zweiten
+  # Durchgang nicht mehr an seine eigene Datenbank.
+  ansible.builtin.shell:
+    cmd: |
+      set -euo pipefail
+      umask 077
+
+      # Laenge ueber wc statt ueber die Shell-Konstruktion mit Doppelkreuz:
+      # Jinja liest die Zeichenfolge geschweifte-Klammer-Doppelkreuz als
+      # Kommentaranfang und zerlegt das Skript beim Templating.
+      gen_secret() {
+        secret=$(openssl rand -base64 24 | tr -d '/+=')
+        len=$(printf '%s' "$secret" | wc -c)
+        if [ "$len" -lt 16 ]; then
+          echo "Passworterzeugung lieferte nur $len Zeichen" >&2
+          return 1
+        fi
+        printf '%s' "$secret"
+      }
+
+      # Erst in Variablen, dann schreiben. Der Umweg ist notwendig: ein
+      # `exit 1` innerhalb einer Kommandosubstitution beendet nur die
+      # Subshell, und `echo "X=$(gen_secret)"` meldet trotzdem Erfolg — es
+      # landeten LEERE Passwoerter in der Datei, die wegen `creates` nie
+      # wieder erneuert wuerde. Eine einfache Zuweisung dagegen loest
+      # set -e zuverlaessig aus.
+      mariadb_pw=$(gen_secret)
+      icingadb_pw=$(gen_secret)
+      web_pw=$(gen_secret)
+      api_pw=$(gen_secret)
+
+      # Ueber eine temporaere Datei, damit bei einem Abbruch mittendrin
+      # keine halbe .env zurueckbleibt.
+      tmp=$(mktemp "{{ icinga_base_dir }}/.env.XXXXXX")
+      {
+        echo "MARIADB_ROOT_PASSWORD=$mariadb_pw"
+        echo "ICINGADB_PASSWORD=$icingadb_pw"
+        echo "ICINGAWEB_PASSWORD=$web_pw"
+        echo "ICINGA_API_PASSWORD=$api_pw"
+      } > "$tmp"
+      mv "$tmp" "{{ icinga_base_dir }}/.env"
+    creates: "{{ icinga_base_dir }}/.env"
+    executable: /bin/bash
+
+- name: Rechte der Zugangsdatei sicherstellen
+  ansible.builtin.file:
+    path: "{{ icinga_base_dir }}/.env"
+    owner: root
+    group: root
+    mode: "0600"
+
+# --- SSH-Schlüssel für check_by_ssh -----------------------------------------
+
+- name: Schlüsselpaar für check_by_ssh erzeugen
+  ansible.builtin.command:
+    argv:
+      - ssh-keygen
+      - -t
+      - ed25519
+      - -N
+      - ""
+      - -C
+      - "icinga-check-by-ssh@{{ inventory_hostname }}"
+      - -f
+      - "{{ icinga_base_dir }}/ssh/id_ed25519"
+    creates: "{{ icinga_base_dir }}/ssh/id_ed25519"
+
+- name: Rechte des privaten Schlüssels sicherstellen
+  ansible.builtin.file:
+    path: "{{ icinga_base_dir }}/ssh/id_ed25519"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Öffentlichen Schlüssel einlesen
+  ansible.builtin.slurp:
+    src: "{{ icinga_base_dir }}/ssh/id_ed25519.pub"
+  register: icinga_pubkey_raw
+
+- name: Öffentlichen Schlüssel als Fakt ablegen
+  # Wird von der Rolle icinga_remote über hostvars gelesen, um ihn auf den
+  # Gästen zu hinterlegen.
+  ansible.builtin.set_fact:
+    icinga_ssh_public_key: "{{ icinga_pubkey_raw.content | b64decode | trim }}"
+
+- name: Adresse des Monitoring-Hosts bestimmen
+  ansible.builtin.set_fact:
+    icinga_master_resolved_address: >-
+      {{ icinga_master_address
+         if icinga_master_address | length > 0
+         else ansible_facts.default_ipv4.address | default(ansible_host | default(inventory_hostname)) }}
+
+# --- Compose-Stack ----------------------------------------------------------
+
+- name: Compose-Datei schreiben
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: "{{ icinga_base_dir }}/compose.yml"
+    owner: root
+    group: root
+    mode: "0640"
+  register: icinga_compose_file
+
+- name: Stack starten
+  ansible.builtin.command:
+    argv: [docker, compose, -f, "{{ icinga_base_dir }}/compose.yml", up, -d, --remove-orphans]
+    chdir: "{{ icinga_base_dir }}"
+  register: icinga_compose_up
+  changed_when: "'Started' in icinga_compose_up.stderr or 'Created' in icinga_compose_up.stderr"
+
+- name: Auf Icinga Web 2 warten
+  ansible.builtin.wait_for:
+    port: "{{ icinga_web_port }}"
+    host: 127.0.0.1
+    timeout: 300
+
+- name: Ergebnis melden
+  ansible.builtin.debug:
+    msg: >-
+      Icinga-Stack läuft auf {{ inventory_hostname }}.
+      Web-Oberfläche: http://{{ icinga_master_resolved_address }}:{{ icinga_web_port }}
+      — Zugangsdaten stehen in {{ icinga_base_dir }}/.env (nur für root lesbar).

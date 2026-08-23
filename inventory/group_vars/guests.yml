@@ -56,3 +56,11 @@ cleanup_docker_prune: false
 health_disk_warn_percent: 85
 # Ab dieser RAM-Auslastung (%) wird gewarnt.
 health_memory_warn_percent: 90
+
+# --- Monitoring ------------------------------------------------------------
+# Benutzer, unter dem sich Icinga per SSH anmeldet, um Prüfungen auszuführen.
+# Muss zum gleichnamigen Wert in inventory/group_vars/monitoring.yml passen.
+icinga_ssh_user: icinga
+
+# Neben monitoring-plugins-basic auch -standard installieren (enthält check_apt).
+icinga_install_standard_plugins: true

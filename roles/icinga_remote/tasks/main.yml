@@ -1,0 +1,123 @@
+---
+# Bereitet einen Gast darauf vor, per check_by_ssh geprüft zu werden:
+# Monitoring-Plugins, ein eigener unprivilegierter Zugang und der öffentliche
+# Schlüssel des Monitoring-Hosts.
+
+- name: Unterstütztes Betriebssystem sicherstellen
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.os_family == 'Debian'
+    fail_msg: >-
+      {{ inventory_hostname }} läuft unter '{{ ansible_facts.os_family }}'.
+      Diese Rolle unterstützt nur Debian/Ubuntu.
+    quiet: true
+
+- name: Öffentlichen Schlüssel des Monitoring-Hosts vorliegen haben
+  ansible.builtin.assert:
+    that:
+      - icinga_ssh_public_key is defined
+      - icinga_ssh_public_key | length > 0
+    fail_msg: >-
+      Der öffentliche Schlüssel des Monitoring-Hosts fehlt. Die Rolle
+      icinga_server muss vor dieser hier gelaufen sein — sie erzeugt das
+      Schlüsselpaar und legt den öffentlichen Teil als Fakt ab.
+      Über playbooks/icinga-setup.yml passiert das automatisch.
+    quiet: true
+
+- name: Monitoring-Plugins installieren
+  ansible.builtin.apt:
+    name: "{{ icinga_plugin_packages }}"
+    state: present
+    lock_timeout: "{{ guest_apt_lock_timeout | default(300) }}"
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  vars:
+    icinga_plugin_packages: >-
+      {{ ['monitoring-plugins-basic']
+         + (['monitoring-plugins-standard'] if icinga_install_standard_plugins | bool else []) }}
+
+- name: Monitoring-Benutzer anlegen
+  # Unprivilegiert und ohne sudo: check_by_ssh führt die Prüfbefehle aus, die
+  # der Master schickt. Ein Zugang mit root-Rechten wäre damit ein Generalschlüssel
+  # für die gesamte Flotte, sobald der Monitoring-Host kompromittiert ist.
+  ansible.builtin.user:
+    name: "{{ icinga_ssh_user }}"
+    state: present
+    system: true
+    shell: /bin/sh
+    home: "/var/lib/{{ icinga_ssh_user }}"
+    create_home: true
+    password: "!"
+
+- name: Verzeichnis für die eigenen Check-Skripte anlegen
+  ansible.builtin.file:
+    path: "{{ icinga_custom_plugin_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Eigene Check-Skripte ausbringen
+  # check_memory und check_systemd_units gibt es in monitoring-plugins nicht.
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "{{ icinga_custom_plugin_dir }}/{{ item }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - check_memory
+    - check_systemd_units
+
+- name: SSH-Verzeichnis des Monitoring-Benutzers anlegen
+  ansible.builtin.file:
+    path: "/var/lib/{{ icinga_ssh_user }}/.ssh"
+    state: directory
+    owner: "{{ icinga_ssh_user }}"
+    group: "{{ icinga_ssh_user }}"
+    mode: "0700"
+
+- name: Öffentlichen Schlüssel hinterlegen
+  # Die Einschränkungen begrenzen den Schaden, falls der private Schlüssel
+  # abhandenkommt: Anmeldung nur von der Adresse des Monitoring-Hosts, keine
+  # Weiterleitungen, kein interaktives Terminal. Auf einen erzwungenen Befehl
+  # (`command=`) lässt sich das nicht reduzieren — check_by_ssh schickt die
+  # jeweilige Prüfung als Kommando mit.
+  ansible.builtin.copy:
+    content: |
+      # Von Ansible verwaltet — Änderungen werden überschrieben.
+      {{ icinga_key_restrictions }} {{ icinga_ssh_public_key }}
+    dest: "/var/lib/{{ icinga_ssh_user }}/.ssh/authorized_keys"
+    owner: "{{ icinga_ssh_user }}"
+    group: "{{ icinga_ssh_user }}"
+    mode: "0600"
+  vars:
+    icinga_key_from: >-
+      {{ ('from="' ~ icinga_master_address ~ '",')
+         if icinga_master_address | length > 0 else '' }}
+    icinga_key_options: >-
+      no-agent-forwarding,no-port-forwarding,no-X11-forwarding,no-pty
+    icinga_key_restrictions: "{{ icinga_key_from }}{{ icinga_key_options }}"
+
+- name: Eigene Skripte auf Lauffähigkeit prüfen
+  # Ein Plugin, das sich nicht ausführen lässt, fällt sonst erst auf, wenn
+  # Icinga es zum ersten Mal aufruft — und meldet dann UNKNOWN statt des
+  # eigentlichen Zustands.
+  ansible.builtin.command:
+    argv: ["{{ icinga_custom_plugin_dir }}/{{ item }}", -h]
+  loop:
+    - check_memory
+    - check_systemd_units
+  changed_when: false
+  # Beide geben bei -h den Hinweistext aus und beenden sich mit 3 (UNKNOWN),
+  # wie es für Monitoring-Plugins üblich ist.
+  failed_when: icinga_plugin_probe.rc not in [0, 3]
+  register: icinga_plugin_probe
+
+- name: Ergebnis melden
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: Monitoring-Zugang '{{ icinga_ssh_user }}'
+      eingerichtet, Plugins vorhanden
+      {{ '(Zugriff beschränkt auf ' ~ icinga_master_address ~ ')'
+         if icinga_master_address | length > 0 else '(ohne Adressbeschränkung)' }}.

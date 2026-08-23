@@ -1,0 +1,51 @@
+---
+icinga_base_dir: /opt/icinga
+icinga_ssh_user: icinga
+
+# Pfad des privaten Schlüssels INNERHALB des icinga2-Containers.
+icinga_ssh_identity_in_container: /data/etc/icinga2/ssh/id_ed25519
+
+# Pfade der Plugins auf den Gästen.
+icinga_plugin_dir: /usr/lib/nagios/plugins
+icinga_custom_plugin_dir: /usr/local/lib/nagios/plugins
+
+# Prüfintervalle.
+icinga_check_interval: 5m
+icinga_retry_interval: 1m
+icinga_max_check_attempts: 3
+
+# --- Schwellwerte -----------------------------------------------------------
+# check_disk und check_swap rechnen in FREIEM Platz, nicht in belegtem:
+# "-w 15%" heißt "warnen, wenn weniger als 15 % frei sind".
+icinga_disk_warn: "15%"
+icinga_disk_crit: "8%"
+icinga_disk_path: "/"
+
+icinga_swap_warn: "30%"
+icinga_swap_crit: "15%"
+
+# check_load rechnet mit -r gegen die Last pro CPU-Kern.
+icinga_load_warn: "1.5,1.2,1.0"
+icinga_load_crit: "3.0,2.5,2.0"
+
+# Speicher und systemd nutzen die selbst mitgebrachten Skripte.
+icinga_memory_warn: 85
+icinga_memory_crit: 95
+
+icinga_systemd_warn: 1
+icinga_systemd_crit: 2
+
+icinga_procs_warn: 300
+icinga_procs_crit: 400
+
+# Welche Prüfungen erzeugt werden sollen.
+icinga_services_enabled:
+  - ping
+  - ssh
+  - disk
+  - load
+  - memory
+  - swap
+  - procs
+  - systemd
+  - apt

@@ -1,0 +1,18 @@
+---
+# Erzeugt nur die Host- und Service-Definitionen neu und lädt icinga2 neu.
+# Der Weg für den Alltag: neuer Gast im Inventory, Schwellwert geändert.
+#
+#   ansible-playbook playbooks/icinga-config.yml
+#   ansible-playbook playbooks/icinga-config.yml -e icinga_disk_warn=20%
+#
+# Neue Gäste brauchen zusätzlich einmalig playbooks/icinga-setup.yml, damit
+# dort der Monitoring-Zugang eingerichtet wird.
+
+- name: Icinga-Prüfungen neu erzeugen
+  hosts: monitoring
+  become: true
+  gather_facts: false
+  max_fail_percentage: "{{ maint_max_fail_percentage | default(100) }}"
+
+  roles:
+    - role: icinga_config
