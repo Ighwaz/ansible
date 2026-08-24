@@ -9,32 +9,178 @@ werden. Die Proxmox-Ebene wird über `pvesh`, `pct` und `qm` direkt auf dem
 PVE-Host angesprochen, es braucht also weder API-Token noch `proxmoxer` auf
 dem Controller.
 
-## Voraussetzungen
+## Von Null zum ersten Lauf
 
-**Auf dem Controller** (dein Rechner): `ansible-core` ab 2.14.
+Diese Anleitung führt von einem frisch geklonten Repo bis zum ersten
+ausgeführten Playbook. Schritt 2 ist der einzige, den du von Hand machen
+musst — danach übernimmt Ansible.
 
-**Auf den PVE-Hosts:** SSH-Zugang mit einem Benutzer, der per `sudo` root
-werden darf. Nur darüber laufen `pvesh`, `pct` und `qm`.
+### 1. Controller vorbereiten
 
-**Auf den Gästen:** SSH-Zugang mit `sudo`-Rechten sowie `python3` (auf
-Debian/Ubuntu ohnehin vorhanden). Ein sehr schlanker Container braucht ggf.
-einmalig `apt install python3 sudo`.
+Der Controller ist der Rechner, von dem aus du Ansible startest. Er braucht
+**ansible-core ab 2.14** (die Rollen verwenden `ansible.builtin.systemd_service`,
+das es erst ab dieser Fassung gibt).
 
-## Einrichtung
+```bash
+# Debian/Ubuntu
+sudo apt install ansible-core
 
-1. `inventory/hosts.yml` an dein Setup anpassen — PVE-Hosts unter `proxmox`,
-   Container unter `lxc`, VMs unter `vms`.
-2. In `inventory/group_vars/all.yml` den `ansible_user` setzen.
-3. Verbindung testen:
+# oder über pip, wenn die Distribution eine zu alte Fassung mitbringt
+pip install "ansible-core>=2.14"
 
-   ```bash
-   ansible all -m ping
-   ```
+git clone https://github.com/Ighwaz/ansible && cd ansible
+ansible --version        # muss 2.14 oder neuer zeigen
+```
 
-Eine `vmid` musst du **nicht** pflegen: Solange der Inventory-Name dem Namen
-in Proxmox entspricht, löst Ansible vmid, Node und Typ automatisch über
-`pvesh get /cluster/resources` auf. Weicht der Name ab, genügt ein
-`pve_vmid: 123` beim betreffenden Host.
+Collections sind **nicht** nötig. Für Linting und die lokale Prüfung optional:
+`pip install -r requirements-dev.txt`.
+
+### 2. Zugang auf den Zielhosts schaffen (einmalig, von Hand)
+
+Hier liegt das Henne-Ei-Problem: Ansible kann Zugänge einrichten, braucht dafür
+aber selbst schon einen. Dieser eine Schritt geht also manuell.
+
+Zuerst auf dem Controller einen Schlüssel erzeugen, falls noch keiner da ist:
+
+```bash
+ssh-keygen -t ed25519 -C "ansible@controller" -f ~/.ssh/id_ansible
+cat ~/.ssh/id_ansible.pub          # diesen Text brauchst du gleich
+```
+
+Dann auf **jedem** PVE-Host und **jedem** Gast als root ausführen — bei
+LXC-Containern am einfachsten über `pct enter <vmid>` auf dem PVE-Host, bei
+VMs über die Konsole im Webinterface:
+
+```bash
+# Benutzer anlegen (ohne Passwort-Anmeldung)
+adduser --disabled-password --gecos "" ansible
+
+# Öffentlichen Schlüssel hinterlegen
+install -d -m 700 -o ansible -g ansible /home/ansible/.ssh
+echo 'ssh-ed25519 AAAA...HIER_DEINEN_SCHLUESSEL... ansible@controller' \
+  > /home/ansible/.ssh/authorized_keys
+chown ansible:ansible /home/ansible/.ssh/authorized_keys
+chmod 600 /home/ansible/.ssh/authorized_keys
+
+# sudo ohne Passwort — zwingend, siehe Kasten unten
+echo 'ansible ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/ansible
+chmod 440 /etc/sudoers.d/ansible
+
+# In sehr schlanken Containern fehlt beides gelegentlich
+apt install -y python3 sudo
+```
+
+> **Warum sudo ohne Passwort?** `ansible.cfg` setzt `become = True` — jeder
+> Aufruf wird zu root. Fragt sudo nach einem Passwort, scheitert schon der
+> erste `ping`. Alternativ kannst du in `inventory/group_vars/all.yml`
+> `ansible_user: root` setzen und dich direkt als root anmelden; dann entfällt
+> die sudoers-Zeile.
+
+**Host-Schlüssel vorab bestätigen.** `ansible.cfg` setzt
+`host_key_checking = True`. Beim allerersten Kontakt kennt der Controller die
+Host-Schlüssel noch nicht und bricht ab. Entweder einmal je Host von Hand
+verbinden (`ssh ansible@192.0.2.21`) oder alle auf einmal aufnehmen:
+
+```bash
+ssh-keyscan -H 192.0.2.10 192.0.2.21 192.0.2.22 >> ~/.ssh/known_hosts
+```
+
+### 3. Inventory ausfüllen
+
+`inventory/hosts.yml` enthält Platzhalter (`192.0.2.x` ist der reservierte
+Beispiel-Adressbereich) — die müssen alle raus. Welche Gäste es gibt, verrät
+der PVE-Host:
+
+```bash
+ssh root@<dein-pve-host> "pvesh get /cluster/resources --type vm"
+```
+
+Daraus wird das Inventory. Trage die Container unter `lxc`, die VMs unter
+`vms` und die PVE-Hosts unter `proxmox` ein:
+
+```yaml
+    proxmox:
+      hosts:
+        pve01:
+          ansible_host: 10.0.0.10
+
+    lxc:
+      hosts:
+        ct-nginx:
+          ansible_host: 10.0.0.21
+
+    vms:
+      hosts:
+        vm-build:
+          ansible_host: 10.0.0.31
+```
+
+**Eine `vmid` musst du nicht pflegen**, solange der Inventory-Name dem Namen in
+Proxmox entspricht — Ansible löst vmid, Node und Typ selbst auf. Weicht der
+Name ab, genügt `pve_vmid: 123` beim betreffenden Host.
+
+Die Gruppen `docker_hosts` und `monitoring` sind nur nötig, wenn du Docker
+bzw. Icinga verwendest. Nicht benötigte Gruppen einfach leeren.
+
+### 4. Zugangsdaten eintragen
+
+In `inventory/group_vars/all.yml`:
+
+```yaml
+ansible_user: ansible
+ansible_ssh_private_key_file: ~/.ssh/id_ansible
+```
+
+### 5. Verbindung prüfen
+
+```bash
+ansible all -m ping
+```
+
+Das prüft in einem Zug SSH-Anmeldung **und** sudo, weil `become = True` gilt.
+Erwartet wird `SUCCESS` für jeden Host. Häufige Fehlermeldungen:
+
+| Meldung | Ursache |
+|---|---|
+| `Permission denied (publickey)` | Schlüssel nicht hinterlegt oder falscher `ansible_user` |
+| `Host key verification failed` | Schritt 2, letzter Absatz — Host-Schlüssel fehlt in `known_hosts` |
+| `sudo: a password is required` | sudoers-Zeile fehlt oder ohne `NOPASSWD` |
+| `/usr/bin/python3: not found` | im Gast fehlt `python3` |
+| `Failed to connect ... Connection refused` | falsche IP, oder sshd läuft nicht |
+
+### 6. Der erste Lauf
+
+Jetzt in dieser Reihenfolge — die ersten beiden ändern **nichts**:
+
+```bash
+# 1. Prüft, ob alle Voraussetzungen wirklich erfüllt sind
+ansible-playbook playbooks/preflight.yml
+
+# 2. Liest den Zustand aus und schreibt einen Report nach reports/
+ansible-playbook playbooks/healthcheck.yml
+
+# 3. Erst jetzt etwas Veränderndes — zuerst als Probelauf,
+#    und nur gegen einen unkritischen Host
+ansible-playbook playbooks/maintenance.yml --limit ct-nginx --check
+ansible-playbook playbooks/maintenance.yml --limit ct-nginx
+```
+
+`preflight.yml` ist der eigentliche Einstiegspunkt: Es prüft, ob `pvesh`,
+`pct` und `qm` erreichbar sind, ob die Cluster-Antwort die erwarteten Felder
+enthält, ob `become` tatsächlich als root ankommt und ob `python3-apt` für
+`--check`-Läufe vorhanden ist. Meldet es Befunde, stimmen die Annahmen dieses
+Repos noch nicht mit deiner Umgebung überein — dann dort anfangen.
+
+### 7. Erst danach: Schlüssel, Docker, Monitoring
+
+Die übrigen Bereiche bauen auf einem funktionierenden Zugang auf und haben
+eigene Abschnitte weiter unten. Sinnvolle Reihenfolge:
+
+1. `ssh-keys.yml` — deine persönlichen Schlüssel ausrollen (**ohne** Härtung,
+   siehe Abschnitt „SSH-Schlüssel")
+2. `pve-node-setup.yml` — falls ein Node noch grundeingerichtet werden muss
+3. `docker-setup.yml` — nur für Hosts in `docker_hosts`
+4. `icinga-setup.yml` — braucht einen Monitoring-Host mit Docker
 
 ## Die Playbooks
 
@@ -55,7 +201,9 @@ in Proxmox entspricht, löst Ansible vmid, Node und Typ automatisch über
 | `playbooks/icinga-config.yml` | Prüfungen aus dem Inventory neu erzeugen | ja |
 | `playbooks/ssh-keys.yml` | SSH-Schlüssel ausrollen, optional sshd härten | ja |
 
-### Vor dem ersten Lauf: Preflight
+### Preflight im Detail
+
+Der Einstiegspunkt aus Schritt 6 oben, hier vollständig beschrieben.
 
 ```bash
 ansible-playbook playbooks/preflight.yml
