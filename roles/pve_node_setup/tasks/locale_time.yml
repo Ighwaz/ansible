@@ -1,0 +1,80 @@
+---
+# Zeitzone, Zeitabgleich und Locale.
+#
+# Für die Zeitzone wird bewusst timedatectl statt des timezone-Moduls
+# verwendet: letzteres steckt in community.general, und dieses Repo kommt
+# absichtlich ohne Collections aus.
+
+- name: Eingestellte Zeitzone ermitteln
+  ansible.builtin.command:
+    argv: [timedatectl, show, -p, Timezone, --value]
+  changed_when: false
+  check_mode: false
+  register: pve_setup_current_tz
+
+- name: Zeitzone setzen
+  ansible.builtin.command:
+    argv: [timedatectl, set-timezone, "{{ pve_setup_timezone }}"]
+  when: pve_setup_current_tz.stdout | trim != pve_setup_timezone
+  changed_when: true
+
+- name: Zeitabgleich sicherstellen
+  when: pve_setup_manage_time_sync | bool
+  block:
+
+    - name: Paket chrony installieren
+      ansible.builtin.apt:
+        name: chrony
+        state: present
+        lock_timeout: "{{ guest_apt_lock_timeout | default(300) }}"
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+
+    - name: Dienst chrony aktivieren
+      ansible.builtin.systemd_service:
+        name: chrony
+        state: started
+        enabled: true
+
+    - name: Zustand des Zeitabgleichs prüfen
+      ansible.builtin.command:
+        argv: [timedatectl, show, -p, NTPSynchronized, --value]
+      changed_when: false
+      check_mode: false
+      register: pve_setup_ntp_state
+
+    - name: Fehlenden Zeitabgleich melden
+      # Kein Abbruch: der Abgleich braucht nach dem Start des Dienstes einen
+      # Moment. Ein Hinweis ist hier ehrlicher als ein Fehlschlag.
+      ansible.builtin.debug:
+        msg: >-
+          HINWEIS: {{ inventory_hostname }} meldet noch keinen erfolgreichen
+          Zeitabgleich (NTPSynchronized={{ pve_setup_ntp_state.stdout | trim }}).
+          Kurz abwarten und mit `timedatectl status` nachsehen — eine falsche
+          Uhrzeit bringt später Cluster und Zertifikate durcheinander.
+      when: (pve_setup_ntp_state.stdout | trim) != 'yes'
+
+- name: Locales zur Erzeugung vormerken
+  ansible.builtin.lineinfile:
+    path: /etc/locale.gen
+    regexp: "^#?\\s*{{ item | regex_escape }}\\s"
+    line: "{{ item }} {{ item.split('.')[1] | default('UTF-8') }}"
+    state: present
+  loop: "{{ ([pve_setup_locale] + pve_setup_extra_locales) | unique }}"
+  notify: Locales erzeugen
+
+- name: Locales sofort erzeugen
+  # Der Handler liefe erst am Ende des Plays. Die folgende systemweite Locale
+  # soll aber auf eine bereits erzeugte Locale zeigen, nicht auf eine
+  # angekündigte.
+  ansible.builtin.meta: flush_handlers
+
+- name: Systemweite Locale setzen
+  ansible.builtin.copy:
+    content: |
+      # Von Ansible verwaltet — Änderungen werden überschrieben.
+      LANG={{ pve_setup_locale }}
+    dest: /etc/default/locale
+    owner: root
+    group: root
+    mode: "0644"

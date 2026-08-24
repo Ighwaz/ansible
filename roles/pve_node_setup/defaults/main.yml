@@ -1,0 +1,78 @@
+---
+# ---------------------------------------------------------------------------
+# Grundeinrichtung eines frisch installierten Proxmox-Nodes
+# ---------------------------------------------------------------------------
+# Diese Rolle fasst bewusst NICHTS Destruktives an:
+#   - keine Datenträger, keine ZFS-Pools
+#   - kein Cluster-Beitritt
+# Beides bleibt manuell, weil ein Fehlgriff dort Daten kostet bzw. einen
+# bestehenden Cluster beschädigen kann.
+
+# --- Paketquellen -----------------------------------------------------------
+# Enterprise-Repo abschalten, no-subscription aktivieren. Nutzt dieselbe Logik
+# wie pve_host_update, damit es nur eine Stelle dafür gibt.
+pve_setup_manage_repos: true
+
+# --- Abo-Hinweis im Webinterface -------------------------------------------
+# Blendet den Hinweis „Sie haben kein gültiges Abonnement" nach dem Anmelden
+# aus. Bewusst standardmäßig AUS: es verändert eine mitgelieferte Datei von
+# Proxmox, und Updates von proxmox-widget-toolkit setzen die Änderung zurück
+# (ein erneuter Lauf stellt sie wieder her).
+pve_setup_hide_subscription_notice: false
+
+# --- Zeit und Sprache -------------------------------------------------------
+pve_setup_timezone: Europe/Berlin
+
+# Locale, die erzeugt und als Systemstandard gesetzt wird.
+pve_setup_locale: de_DE.UTF-8
+
+# Zusätzliche Locales, die nur erzeugt werden sollen.
+pve_setup_extra_locales:
+  - en_US.UTF-8
+
+# Zeitabgleich sicherstellen (chrony ist bei Proxmox der Standard).
+pve_setup_manage_time_sync: true
+
+# --- Basispakete ------------------------------------------------------------
+pve_setup_base_packages:
+  - vim
+  - htop
+  - curl
+  - tmux
+  - lm-sensors
+  - lsb-release
+  - ca-certificates
+  - dnsutils
+  - iotop
+  - ncdu
+
+# --- vzdump -----------------------------------------------------------------
+# Standardwerte für Sicherungen. Leere Werte werden nicht geschrieben, dann
+# gilt weiterhin die Vorgabe von Proxmox.
+pve_setup_manage_vzdump: true
+
+# Ziel-Storage für Sicherungen. Leer = keine Vorgabe.
+pve_setup_vzdump_storage: ""
+
+# snapshot | suspend | stop
+pve_setup_vzdump_mode: snapshot
+
+# 0 | gzip | lzo | zstd
+pve_setup_vzdump_compress: zstd
+
+# Bandbreitenbegrenzung in KB/s. 0 = unbegrenzt.
+pve_setup_vzdump_bwlimit: 0
+
+# Aufbewahrung. Leer lassen, um die Vorgabe von Proxmox zu behalten.
+pve_setup_vzdump_keep_last: 3
+pve_setup_vzdump_keep_daily: 7
+pve_setup_vzdump_keep_weekly: 4
+pve_setup_vzdump_keep_monthly: 6
+
+# Wie viele Sicherungsaufträge gleichzeitig laufen dürfen.
+pve_setup_vzdump_maxfiles: ""
+
+# --- Storage-Prüfung (nur lesend) ------------------------------------------
+# Erwartete Storages. Fehlt eines davon, meldet die Rolle das — sie legt aber
+# nichts an, weil das Anlegen von Storage Datenträger berührt.
+pve_setup_expected_storages: []

@@ -1,0 +1,23 @@
+---
+# Datei des Webinterface, in der der Abo-Hinweis steckt.
+pve_setup_widget_toolkit: /usr/share/javascript/proxmox-widget-toolkit/proxmoxlib.js
+
+# Erkennungsmerkmal, ob die Datei überhaupt noch so aussieht wie erwartet.
+# Zeilenbasiert, damit grep damit umgehen kann.
+pve_setup_notice_probe: "data.status.toLowerCase() !== 'active'"
+
+# Die VOLLSTÄNDIGE Bedingung, die den Hinweis auslöst — über den Zeilenumbruch
+# hinweg (in der Datei steht `res` am Ende der einen und `.data...` am Anfang
+# der nächsten Zeile).
+#
+# Warum die ganze Bedingung und nicht nur das Erkennungsmerkmal: Ersetzt man
+# allein `data.status.toLowerCase() !== 'active'`, bleibt das vorangehende
+# `res` stehen und es entsteht `res.false`. Das ist zwar gültiges JavaScript
+# und wirkt sogar richtig — aber nur zufällig, weil ein reserviertes Wort als
+# Eigenschaftsname erlaubt ist und `undefined` als falsch gilt. Verlassen
+# sollte man sich darauf nicht.
+pve_setup_notice_regex: >-
+  res === null \|\| res === undefined \|\| !res \|\| res\s*\.data\.status\.toLowerCase\(\) !== 'active'
+
+# Markierung, an der eine bereits vorgenommene Anpassung wiedererkannt wird.
+pve_setup_notice_marker: "Abo-Hinweis durch Ansible ausgeblendet"

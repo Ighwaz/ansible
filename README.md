@@ -47,6 +47,7 @@ in Proxmox entspricht, löst Ansible vmid, Node und Typ automatisch über
 | `playbooks/cleanup.yml` | Nur Housekeeping (Paketreste, Cache, Journal) | ja |
 | `playbooks/snapshot.yml` | Nur Snapshots anlegen, sonst nichts | ja (nur Snapshot) |
 | `playbooks/snapshot-prune.yml` | Alte Ansible-Snapshots aufräumen | ja (nur Snapshots) |
+| `playbooks/pve-node-setup.yml` | Neuen Proxmox-Node grundeinrichten | ja |
 | `playbooks/pve-host-update.yml` | Die PVE-Hosts selbst aktualisieren | ja |
 | `playbooks/docker-setup.yml` | Docker installieren (rootful oder rootless) | ja |
 | `playbooks/docker-update.yml` | Docker selbst aktualisieren, mit Container-Kontrolle | ja |
@@ -128,6 +129,59 @@ fehlgeschlagener Host das gesamte Play beenden.
 
 **Host für Host statt alles auf einmal.** Standard ist `maint_serial: 1`.
 Fällt ein Dienst beim Neustart aus, betrifft das immer nur einen Gast.
+
+## Neuen Proxmox-Node einrichten
+
+```bash
+ansible-playbook playbooks/pve-node-setup.yml --check --limit pve02
+ansible-playbook playbooks/pve-node-setup.yml --limit pve02
+```
+
+Deckt ab: Paketquellen (Enterprise aus, no-subscription an), Zeitzone und
+Zeitabgleich, Locale, Basiswerkzeuge, Vorgaben für Sicherungen und einen
+lesenden Abgleich des erwarteten Storages.
+
+### Was die Rolle bewusst nicht tut
+
+Zwei Dinge bleiben manuell, weil ein Fehlgriff dort teuer ist:
+
+- **Kein Cluster-Beitritt.** `pvecm add` auf dem falschen Node oder zur
+  falschen Zeit beschädigt einen bestehenden Cluster.
+- **Kein Anlegen von Storage.** Das Erzeugen eines ZFS-Pools löscht die
+  angegebenen Datenträger. Die Rolle prüft nur, ob die unter
+  `pve_setup_expected_storages` erwarteten Storages vorhanden sind, und meldet
+  Abweichungen. Sie unterscheidet dabei zwischen „fehlt" und „nicht
+  ermittelbar" — scheitert `pvesm status`, ist der Zustand unbekannt, nicht
+  leer.
+
+Die Repo-Logik wird aus `pve_host_update` wiederverwendet statt verdoppelt:
+die Unterscheidung zwischen dem `.list`-Format (PVE 8) und deb822 (PVE 9)
+wird nur an einer Stelle gepflegt.
+
+### Abo-Hinweis im Webinterface
+
+`pve_setup_hide_subscription_notice` blendet den Hinweis nach dem Anmelden
+aus. Das verändert eine mitgelieferte Datei von Proxmox — zwei Dinge dazu:
+
+- Ein Update von `proxmox-widget-toolkit` setzt die Änderung zurück; ein
+  erneuter Lauf stellt sie wieder her. Eine Sicherungskopie bleibt jeweils
+  daneben liegen.
+- Ersetzt wird die **gesamte** Bedingung, nicht nur ein Ausschnitt. Der
+  verbreitete Einzeiler, der bloß `data.status.toLowerCase() !== 'active'`
+  ersetzt, hinterlässt `res.false` — das wirkt zwar richtig, aber nur zufällig,
+  weil ein reserviertes Wort als Eigenschaftsname erlaubt ist und `undefined`
+  als falsch gilt. Hier steht danach schlicht `if (false /* ... */)`.
+
+Erkennt die Rolle den Aufbau der Datei nicht wieder — etwa nach einem
+Proxmox-Update —, meldet sie das und lässt die Datei unangetastet, statt zu
+raten.
+
+### Vorgaben für Sicherungen
+
+`/etc/vzdump.conf` bekommt Modus, Komprimierung, optional eine
+Bandbreitenbegrenzung und eine gestaffelte Aufbewahrung über `prune-backups`.
+Leere Werte werden weggelassen, dann gilt weiterhin die Vorgabe von Proxmox.
+Ein Sicherungsauftrag mit eigenen Einstellungen sticht diese Vorgaben.
 
 ## Docker
 
@@ -454,6 +508,7 @@ playbooks/                  Die aufrufbaren Playbooks
 roles/
   pve_facts                 Löst Gäste zu vmid/Node/Typ auf
   pve_snapshot              Snapshot anlegen und alte aufräumen
+  pve_node_setup            Grundeinrichtung eines neuen Proxmox-Nodes
   pve_host_update           Updates für die PVE-Hosts selbst
   guest_update              Paket-Updates + Reboot-Erkennung
   guest_reboot              Neustart (LXC über den Host, VMs von innen)

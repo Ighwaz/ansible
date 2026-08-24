@@ -1,0 +1,95 @@
+---
+# Grundeinrichtung eines Proxmox-Nodes. Fasst bewusst weder Datenträger noch
+# den Cluster an — siehe defaults/main.yml.
+
+- name: Proxmox VE auf dem Host verifizieren
+  ansible.builtin.stat:
+    path: /usr/bin/pveversion
+  register: pve_setup_binary
+
+- name: Abbruch, wenn kein PVE-Host
+  ansible.builtin.assert:
+    that:
+      - pve_setup_binary.stat.exists
+    fail_msg: >-
+      Auf {{ inventory_hostname }} wurde kein Proxmox VE gefunden
+      (/usr/bin/pveversion fehlt). Steht der Host versehentlich in der
+      Gruppe 'proxmox'?
+    quiet: true
+
+- name: Nutzbares systemd voraussetzen
+  # Die Rolle steuert Zeitzone, chrony und pveproxy über systemd. Fehlt es,
+  # scheitern diese Schritte mit "non-zero return code" — einer Meldung, die
+  # nichts über die Ursache sagt. Auf einem echten PVE-Node ist systemd immer
+  # vorhanden; trifft dieser Abbruch zu, stimmt etwas Grundlegenderes nicht.
+  ansible.builtin.command:
+    argv: [systemctl, is-system-running]
+  changed_when: false
+  # 'degraded' ist kein Hinderungsgrund: einzelne Units können fehlerhaft
+  # sein, ohne dass systemd als Ganzes unbrauchbar wäre.
+  failed_when: false
+  check_mode: false
+  register: pve_setup_systemd
+
+- name: Abbruch bei unbrauchbarem systemd
+  ansible.builtin.fail:
+    msg: >-
+      ABBRUCH auf {{ inventory_hostname }}: systemd meldet
+      '{{ pve_setup_systemd.stdout | default('') | trim
+         | default('nicht ansprechbar', true) }}'.
+      Diese Rolle setzt ein nutzbares systemd voraus (Zeitzone, chrony,
+      pveproxy). Läuft der Host wirklich als Proxmox-Node?
+  when: pve_setup_systemd.stdout | default('') | trim not in ['running', 'degraded', 'starting']
+
+- name: Version des Nodes erfassen
+  ansible.builtin.command:
+    argv: [pveversion]
+  changed_when: false
+  check_mode: false
+  register: pve_setup_version
+
+- name: Paketquellen einrichten
+  # Wiederverwendung statt Verdopplung: die Unterscheidung zwischen dem
+  # .list-Format (PVE 8) und deb822 (PVE 9) steckt bereits in pve_host_update
+  # und soll nur an einer Stelle gepflegt werden.
+  ansible.builtin.include_role:
+    name: pve_host_update
+    tasks_from: repos.yml
+  vars:
+    pve_use_no_subscription_repo: true
+  when: pve_setup_manage_repos | bool
+
+- name: Zeit und Sprache einrichten
+  ansible.builtin.include_tasks: locale_time.yml
+
+- name: Basispakete installieren
+  ansible.builtin.apt:
+    name: "{{ pve_setup_base_packages }}"
+    state: present
+    lock_timeout: "{{ guest_apt_lock_timeout | default(300) }}"
+  environment:
+    DEBIAN_FRONTEND: noninteractive
+  when: pve_setup_base_packages | length > 0
+
+- name: Abo-Hinweis im Webinterface ausblenden
+  ansible.builtin.include_tasks: subscription_notice.yml
+  when: pve_setup_hide_subscription_notice | bool
+
+- name: Vorgaben für Sicherungen setzen
+  ansible.builtin.include_tasks: vzdump.yml
+  when: pve_setup_manage_vzdump | bool
+
+- name: Storage abgleichen
+  ansible.builtin.include_tasks: storage_check.yml
+  when: pve_setup_expected_storages | length > 0
+
+- name: Ergebnis melden
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }} eingerichtet — {{ pve_setup_version.stdout | trim }},
+      Zeitzone {{ pve_setup_timezone }}, Locale {{ pve_setup_locale }}.
+      {{ 'Sicherungsvorgaben angepasst (Modus ' ~ pve_setup_vzdump_mode
+         ~ ', Komprimierung ' ~ pve_setup_vzdump_compress
+         ~ '), die alte Fassung liegt als Sicherungskopie daneben.'
+         if pve_setup_vzdump_conf.changed | default(false) else '' }}
+      Cluster-Beitritt und Storage bleiben bewusst manuell.

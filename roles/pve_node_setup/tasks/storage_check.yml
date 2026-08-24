@@ -1,0 +1,60 @@
+---
+# Gleicht die vorhandenen Storages mit den erwarteten ab. Rein lesend: das
+# Anlegen von Storage berührt Datenträger und bleibt deshalb manuell.
+
+- name: Vorhandene Storages abfragen
+  ansible.builtin.command:
+    argv: [pvesm, status]
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  register: pve_setup_pvesm
+
+- name: Nicht ermittelbare Storages melden
+  # Scheitert die Abfrage, ist der Zustand UNBEKANNT — nicht "fehlt". Diese
+  # Unterscheidung ist keine Wortklauberei: "fehlt" schickt bei der Suche in
+  # die Richtung des Storages, obwohl das Problem woanders liegt.
+  ansible.builtin.debug:
+    msg: >-
+      HINWEIS: Auf {{ inventory_hostname }} liefert `pvesm status` keinen
+      brauchbaren Zustand (rc={{ pve_setup_pvesm.rc }}):
+      {{ pve_setup_pvesm.stderr | default('') | trim }}
+      Über das vorhandene Storage lässt sich damit nichts sagen.
+  when: pve_setup_pvesm.rc != 0
+
+- name: Abgleich durchführen
+  when: pve_setup_pvesm.rc == 0
+  block:
+
+    - name: Storage-Namen aufbereiten
+      ansible.builtin.set_fact:
+        # Erste Zeile ist die Überschrift, erste Spalte je Zeile der Name.
+        pve_setup_present_storages: >-
+          {{ pve_setup_pvesm.stdout_lines[1:]
+             | map('regex_replace', '^(\S+).*$', '\1')
+             | list }}
+
+    - name: Fehlende Storages ermitteln
+      ansible.builtin.set_fact:
+        pve_setup_missing_storages: >-
+          {{ pve_setup_expected_storages | difference(pve_setup_present_storages) }}
+
+    - name: Fehlende Storages melden
+      # Bewusst kein Abbruch: ein neuer Node hat sein Storage naturgemäß noch
+      # nicht, und das Anlegen gehört in bewusste Hände.
+      ansible.builtin.debug:
+        msg: >-
+          HINWEIS: Auf {{ inventory_hostname }} fehlt/fehlen die erwartete(n)
+          Storage(s) {{ pve_setup_missing_storages | join(', ') }}.
+          Vorhanden sind: {{ pve_setup_present_storages | join(', ') }}.
+          Anlegen über die Oberfläche oder `pvesm add` — diese Rolle fasst
+          Datenträger bewusst nicht an.
+      when: pve_setup_missing_storages | length > 0
+
+    - name: Vollständiges Storage bestätigen
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: alle
+          {{ pve_setup_expected_storages | length }} erwarteten Storages
+          vorhanden.
+      when: pve_setup_missing_storages | length == 0

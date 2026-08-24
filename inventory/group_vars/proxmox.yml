@@ -14,3 +14,31 @@ pve_use_no_subscription_repo: true
 # Ein PVE-Host wird NIE automatisch neu gestartet — das würde alle Gäste
 # mitreißen. Reboots des Hypervisors bleiben bewusst manuell.
 maint_reboot_allowed: false
+
+# ---------------------------------------------------------------------------
+# Grundeinrichtung (playbooks/pve-node-setup.yml)
+# ---------------------------------------------------------------------------
+
+pve_setup_timezone: Europe/Berlin
+pve_setup_locale: de_DE.UTF-8
+
+# Abo-Hinweis im Webinterface ausblenden. Verändert eine mitgelieferte Datei
+# von Proxmox; ein Update von proxmox-widget-toolkit setzt das zurück, ein
+# erneuter Lauf stellt es wieder her.
+pve_setup_hide_subscription_notice: true
+
+# Vorgaben für Sicherungen. Ziel-Storage leer lassen, solange keines feststeht.
+pve_setup_vzdump_storage: ""
+pve_setup_vzdump_mode: snapshot
+pve_setup_vzdump_compress: zstd
+# Bandbreitenbegrenzung in KB/s, damit eine Sicherung nicht alles andere
+# ausbremst. 0 = unbegrenzt.
+pve_setup_vzdump_bwlimit: 0
+
+# Storages, die auf jedem Node vorhanden sein sollen. Fehlt eines, meldet die
+# Rolle das — angelegt wird nichts, das berührt Datenträger.
+pve_setup_expected_storages: []
+# Beispiel:
+# pve_setup_expected_storages:
+#   - local
+#   - local-lvm
