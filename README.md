@@ -18,8 +18,8 @@ musst — danach übernimmt Ansible.
 ### 1. Controller vorbereiten
 
 Der Controller ist der Rechner, von dem aus du Ansible startest. Er braucht
-**ansible-core ab 2.14** (die Rollen verwenden `ansible.builtin.systemd_service`,
-das es erst ab dieser Fassung gibt).
+**Linux** und **ansible-core ab 2.14** (die Rollen verwenden
+`ansible.builtin.systemd_service`, das es erst ab dieser Fassung gibt).
 
 ```bash
 # Debian/Ubuntu
@@ -34,6 +34,61 @@ ansible --version        # muss 2.14 oder neuer zeigen
 
 Collections sind **nicht** nötig. Für Linting und die lokale Prüfung optional:
 `pip install -r requirements-dev.txt`.
+
+> **Windows geht nicht als Controller.** Ansible unterstützt Windows nur als
+> *Ziel*, nicht als Steuerrechner. Eine Installation per pip unter Windows
+> lässt sich zwar durchführen, bricht aber beim ersten Aufruf ab:
+>
+> ```
+> File "...\ansible\cli\__init__.py", line 46, in check_blocking_io
+>     if not os.get_blocking(fd):
+> OSError: [WinError 1] Unzulässige Funktion
+> ```
+>
+> `check_blocking_io()` läuft beim Import der CLI, noch vor allem anderen, und
+> `os.get_blocking()` gibt es nur unter Unix. Das ist kein Fehler in deiner
+> Installation und nicht reparierbar.
+
+#### Unter Windows: WSL oder ein Linux-Gast
+
+**Der schnelle Weg — WSL2.** In PowerShell:
+
+```powershell
+wsl --install -d Ubuntu
+```
+
+Danach in der Ubuntu-Shell:
+
+```bash
+sudo apt update && sudo apt install -y ansible-core git
+git clone https://github.com/Ighwaz/ansible ~/ansible
+cd ~/ansible && ansible --version
+```
+
+> **Das Repo muss im WSL-Dateisystem liegen, nicht unter `/mnt/c`.** WSL
+> mountet Windows-Laufwerke welt-schreibbar (777), und Ansible **ignoriert
+> seine `ansible.cfg` in welt-schreibbaren Verzeichnissen** — mit einer
+> Warnung, die man leicht überliest:
+>
+> ```
+> [WARNING]: Ansible is being run in a world writable directory,
+> ignoring it as an ansible.cfg source.
+> ```
+>
+> Damit fielen still alle Einstellungen dieses Repos weg: der Inventory-Pfad,
+> `become = True`, `roles_path`. Die Playbooks liefen dann scheinbar, aber
+> gegen das falsche Inventory und ohne root-Rechte. Deshalb `~/ansible` statt
+> `/mnt/c/Users/...`.
+>
+> Mit IntelliJ oder VS Code kommst du trotzdem bequem an die Dateien:
+> `\\wsl$\Ubuntu\home\<benutzer>\ansible` öffnen — bearbeitet wird unter
+> Windows, ausgeführt in WSL.
+
+**Der aufgeräumte Weg — ein LXC auf dem Proxmox selbst.** Ein kleiner
+Debian-Container (1 vCPU, 512 MB) als Ansible-Controller: immer erreichbar,
+kein Dateisystem-Grenzfall, und er steht schon im selben Netz wie alles, was
+er verwaltet. Dann wird dieser Container Teil deines Inventories wie jeder
+andere Gast auch.
 
 ### 2. Zugang auf den Zielhosts schaffen (einmalig, von Hand)
 
