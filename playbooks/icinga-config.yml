@@ -16,3 +16,4 @@
 
   roles:
     - role: icinga_config
+      tags: [icinga, config]

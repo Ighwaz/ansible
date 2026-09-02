@@ -1,0 +1,100 @@
+---
+# Plant den Neustart über atd ein, statt ihn sofort auszulösen. Der Lauf wartet
+# danach NICHT auf die Rückkehr des Hosts — das Playbook ist mit dem Einplanen
+# fertig.
+#
+# Ausgelöst wird der Neustart dort, wo er auch sofort ausgelöst würde: für
+# LXC-Container auf dem PVE-Host (`pct reboot`), sonst im Gast selbst.
+
+- name: Ziel für den eingeplanten Neustart bestimmen
+  ansible.builtin.set_fact:
+    guest_reboot_at_host: >-
+      {{ pve_owner_host if (guest_reboot_via_pve | bool) else inventory_hostname }}
+    guest_reboot_at_command: >-
+      {{ ('pct reboot ' ~ (pve_vmid | string) ~ ' --timeout ' ~ (maint_reboot_timeout | string))
+         if (guest_reboot_via_pve | bool)
+         else 'shutdown -r now' }}
+
+- name: Paket at bereitstellen
+  # Bewusst `apt` statt `package`: das Repository ist auf Debian/Ubuntu
+  # festgelegt, und `package` müsste für den delegierten PVE-Host Fakten
+  # kennen, die in einem Gäste-Play nicht erhoben wurden.
+  ansible.builtin.apt:
+    name: at
+    state: present
+  delegate_to: "{{ guest_reboot_at_host }}"
+
+- name: Dienst atd starten und aktivieren
+  ansible.builtin.systemd_service:
+    name: atd
+    state: started
+    enabled: true
+  delegate_to: "{{ guest_reboot_at_host }}"
+
+- name: Zuvor eingeplante Neustarts dieses Gastes entfernen
+  # Ohne das würde jeder Lauf einen weiteren Job in die Warteschlange legen und
+  # der Host mehrfach hintereinander neu starten. Erkannt werden ausschließlich
+  # Jobs mit der Markierung unten — von Hand eingeplante bleiben unberührt.
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      removed=0
+      for id in $(atq 2>/dev/null | awk '{print $1}'); do
+        if at -c "$id" 2>/dev/null | grep -qF '{{ guest_reboot_at_marker }}'; then
+          atrm "$id" && removed=$((removed + 1))
+        fi
+      done
+      echo "removed=$removed"
+    executable: /bin/bash
+  delegate_to: "{{ guest_reboot_at_host }}"
+  register: guest_reboot_at_cleanup
+  changed_when: not guest_reboot_at_cleanup.stdout is search('removed=0')
+
+- name: Neustart einplanen
+  # `at` übernimmt die Umgebung des aufrufenden Prozesses — also die des
+  # Ansible-Laufs, deren PATH je nach Verbindung und become-Methode
+  # überraschend knapp ausfallen kann. Ein Job, der `shutdown` dann nicht
+  # findet, scheitert still: seine Ausgabe geht per Mail an root und der
+  # Neustart bleibt aus. Deshalb setzt der Job seinen PATH selbst.
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      printf '%s\nPATH=%s\nexport PATH\n%s\n' \
+        '{{ guest_reboot_at_marker }}' \
+        '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
+        '{{ guest_reboot_at_command }}' \
+        | at {{ guest_reboot_when | quote }}
+    executable: /bin/bash
+  delegate_to: "{{ guest_reboot_at_host }}"
+  changed_when: true
+
+- name: Eingeplanten Job in der Warteschlange wiederfinden
+  # `at` meldet auch dann Erfolg, wenn kein atd läuft — der Job liegt dann zwar
+  # in der Warteschlange, wird aber nie ausgeführt. Diese Prüfung stellt
+  # wenigstens sicher, dass er überhaupt angekommen ist, und liefert die
+  # Zeitangabe, die at daraus gemacht hat.
+  ansible.builtin.shell:
+    cmd: |
+      set -o pipefail
+      for id in $(atq 2>/dev/null | awk '{print $1}'); do
+        if at -c "$id" 2>/dev/null | grep -qF '{{ guest_reboot_at_marker }}'; then
+          atq | awk -v i="$id" '$1 == i {$1 = ""; print substr($0, 2)}'
+        fi
+      done
+    executable: /bin/bash
+  delegate_to: "{{ guest_reboot_at_host }}"
+  register: guest_reboot_at_queue
+  changed_when: false
+  failed_when: guest_reboot_at_queue.stdout | trim | length == 0
+
+- name: Eingeplanten Neustart melden
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: Neustart eingeplant für
+      {{ (guest_reboot_at_queue.stdout_lines | default([])) | first
+         | default(guest_reboot_when, true) | trim }}
+      ({{ guest_reboot_at_command }} auf {{ guest_reboot_at_host }}).
+      {{ 'PROBELAUF — es wurde nichts eingeplant.'
+         if ansible_check_mode else 'Der Lauf wartet nicht darauf.' }}
+      Grund: {{ (guest_reboot_reasons | default([]) | join('; '))
+               or 'erzwungen über maint_reboot_force' }}

@@ -1,0 +1,44 @@
+---
+# Bestandsaufnahme aller authorized_keys — rein lesend, ändert nichts.
+#
+#   ansible-playbook playbooks/ssh-keys-audit.yml
+#   ansible-playbook playbooks/ssh-keys-audit.yml --limit proxmox
+#   ansible-playbook playbooks/ssh-keys-audit.yml -e ssh_audit_fetch=false
+#
+# Der richtige Schritt VOR playbooks/ssh-keys.yml: der Report zeigt je Host und
+# Benutzer, welche Schlüssel dort liegen und welche davon ein exklusiver Lauf
+# entfernen würde. Was dort als "würde entfernt" steht und bleiben soll, gehört
+# vorher nach inventory/group_vars/all.yml.
+#
+# Läuft absichtlich gegen `all` und nicht nur gegen `guests` — ein vergessener
+# Schlüssel auf dem PVE-Host wiegt am schwersten.
+
+- name: SSH-Schlüssel erfassen
+  hosts: all
+  become: true
+  gather_facts: false
+  # Lesend: alle Hosts dürfen parallel laufen.
+  max_fail_percentage: "{{ maint_max_fail_percentage | default(100) }}"
+  tags:
+    - ssh
+    - audit
+
+  pre_tasks:
+    - name: Lauf-ID für den Report festlegen
+      ansible.builtin.set_fact:
+        maint_run_id: "{{ lookup('pipe', 'date -u +%Y%m%dT%H%M%S') }}"
+      run_once: true
+
+  tasks:
+    - name: Vorhandene authorized_keys einsammeln
+      ansible.builtin.include_role:
+        name: ssh_keys_audit
+
+    - name: Report schreiben
+      ansible.builtin.include_role:
+        name: ssh_keys_audit
+        tasks_from: report.yml
+      # Der Report fasst alle Hosts zusammen und wird daher genau einmal
+      # erzeugt, nicht je Host.
+      run_once: true
+      when: ssh_audit_write_report | default(true) | bool

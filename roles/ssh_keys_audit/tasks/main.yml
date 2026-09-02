@@ -1,0 +1,47 @@
+---
+# Rein lesend. Läuft bewusst auf `all`, nicht nur auf `guests`: ein vergessener
+# Schlüssel auf dem PVE-Host ist der teuerste von allen.
+
+- name: Benutzerdatenbank auslesen
+  # Erzeugt den Fakt `getent_passwd`: {benutzer: [passwd, uid, gid, gecos,
+  # home, shell]} — der Benutzername steht im Schlüssel, deshalb beginnt die
+  # Liste bei 'x' und Home/Shell liegen auf Index 4 und 5.
+  ansible.builtin.getent:
+    database: passwd
+
+- name: Anmeldefähige Benutzer bestimmen
+  ansible.builtin.set_fact:
+    ssh_audit_users: >-
+      {{ ansible_facts.getent_passwd | dict2items
+         | rejectattr('value.5', 'search', ssh_audit_ignored_shells)
+         | rejectattr('key', 'in', ssh_audit_ignored_users)
+         | selectattr('value.4', 'search', '^/')
+         | list }}
+
+- name: Gefundene Benutzer anzeigen
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: {{ ssh_audit_users | length }} anmeldefähige(r)
+      Benutzer — {{ ssh_audit_users | map(attribute='key') | join(', ') }}
+
+- name: Dateien authorized_keys einlesen
+  ansible.builtin.slurp:
+    src: "{{ item.value[4] }}/.ssh/authorized_keys"
+  loop: "{{ ssh_audit_users }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: ssh_audit_raw
+  # Die Datei fehlt bei den meisten Benutzern — das ist der Normalfall und
+  # kein Fehler. Einträge ohne `content` wertet der Report als "keine Datei".
+  failed_when: false
+
+- name: Gefundene Dateien auf dem Controller ablegen
+  ansible.builtin.fetch:
+    src: "{{ item.value[4] }}/.ssh/authorized_keys"
+    dest: "{{ ssh_audit_dir }}/{{ inventory_hostname }}/{{ item.key }}"
+    flat: true
+    fail_on_missing: false
+  loop: "{{ ssh_audit_users }}"
+  loop_control:
+    label: "{{ item.key }}"
+  when: ssh_audit_fetch | bool

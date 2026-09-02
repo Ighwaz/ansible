@@ -14,9 +14,11 @@
 
   roles:
     - role: pve_facts
+      tags: [facts, prune]
 
   tasks:
     - name: Snapshots dieses Gastes prüfen und aufräumen
       ansible.builtin.include_role:
         name: pve_snapshot
         tasks_from: prune.yml
+      tags: [prune]

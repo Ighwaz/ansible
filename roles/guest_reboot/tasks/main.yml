@@ -1,49 +1,85 @@
 ---
 # Startet den Gast neu, sofern das Update einen Neustart erfordert
 # (Fakt `guest_reboot_required` aus der Rolle `guest_update`).
+#
+# Ob überhaupt neu gestartet wird, entscheidet `maint_reboot_allowed` je Host.
+# WANN, entscheidet `maint_reboot_time`: sofort ("now"), zu einem per atd
+# eingeplanten Zeitpunkt, oder gar nicht ("").
+
+- name: Neustartbedarf zusammenfassen
+  ansible.builtin.set_fact:
+    # `maint_reboot_force` hebt die Erkennung auf — gedacht für den Fall, dass
+    # kein Signal anschlägt, ein Dienst aber trotzdem hängt.
+    guest_reboot_wanted: >-
+      {{ (guest_reboot_required | default(false) | bool)
+         or (maint_reboot_force | bool) }}
+    # Auf "" oder "now" reduziert oder der unveränderte at-Zeitausdruck.
+    guest_reboot_when: "{{ maint_reboot_time | default('now') | trim }}"
+    # Wo der Neustart ausgelöst wird: für LXC bevorzugt auf dem PVE-Host,
+    # sonst im Gast selbst.
+    guest_reboot_via_pve: >-
+      {{ (pve_type | default('qemu') == 'lxc')
+         and (lxc_reboot_via_host | bool)
+         and (pve_owner_host | default('') | length > 0) }}
 
 - name: Kein Neustart nötig
   ansible.builtin.debug:
     msg: "{{ inventory_hostname }}: kein Neustart erforderlich."
-  when: not (guest_reboot_required | default(false) | bool)
+  when: not (guest_reboot_wanted | bool)
 
 - name: Neustart erforderlich, aber per Konfiguration untersagt
   ansible.builtin.debug:
     msg: >-
       HINWEIS: {{ inventory_hostname }} benötigt einen Neustart, ist aber mit
       `maint_reboot_allowed: false` konfiguriert. Bitte manuell einplanen.
-      Grund: {{ guest_reboot_reasons | default([]) | join('; ') }}
+      Grund: {{ (guest_reboot_reasons | default([]) | join('; '))
+               or 'erzwungen über maint_reboot_force' }}
   when:
-    - guest_reboot_required | default(false) | bool
+    - guest_reboot_wanted | bool
     - not (maint_reboot_allowed | bool)
 
-- name: Neustart durchführen
+- name: Neustart erforderlich, für diesen Lauf aber abgewählt
+  ansible.builtin.debug:
+    msg: >-
+      HINWEIS: {{ inventory_hostname }} benötigt einen Neustart.
+      `maint_reboot_time` ist leer, es wird nichts ausgelöst.
+      Grund: {{ (guest_reboot_reasons | default([]) | join('; '))
+               or 'erzwungen über maint_reboot_force' }}
   when:
-    - guest_reboot_required | default(false) | bool
+    - guest_reboot_wanted | bool
     - maint_reboot_allowed | bool
+    - guest_reboot_when | length == 0
+
+- name: Neustart sofort durchführen
+  when:
+    - guest_reboot_wanted | bool
+    - maint_reboot_allowed | bool
+    - guest_reboot_when == 'now'
   block:
 
-    - name: LXC-Container über den PVE-Host neu starten
-      when:
-        - pve_type | default('qemu') == 'lxc'
-        - lxc_reboot_via_host | bool
-      block:
+    - name: Neustart über pct reboot auslösen
+      ansible.builtin.command:
+        argv:
+          - pct
+          - reboot
+          - "{{ pve_vmid | string }}"
+          - --timeout
+          - "{{ maint_reboot_timeout | string }}"
+      # `delegate_to` wird vor dem `when` aufgelöst: stünde hier nur
+      # {{ pve_owner_host }}, scheiterte die Aufgabe mit "'pve_owner_host' is
+      # undefined" auch dann, wenn sie gar nicht laufen soll — etwa auf einem
+      # Gast, für den es keinen PVE-Host im Inventory gibt. Der Fallback ist
+      # nie der tatsächliche Wert: läuft die Aufgabe, ist pve_owner_host
+      # gesetzt, denn genau das prüft guest_reboot_via_pve.
+      delegate_to: "{{ pve_owner_host | default(inventory_hostname) }}"
+      changed_when: true
+      when: guest_reboot_via_pve | bool
 
-        - name: Neustart über pct reboot auslösen
-          ansible.builtin.command:
-            argv:
-              - pct
-              - reboot
-              - "{{ pve_vmid | string }}"
-              - --timeout
-              - "{{ maint_reboot_timeout | string }}"
-          delegate_to: "{{ pve_owner_host }}"
-          changed_when: true
-
-        - name: Auf Rückkehr des Containers warten
-          ansible.builtin.wait_for_connection:
-            delay: "{{ maint_reboot_delay }}"
-            timeout: "{{ maint_reboot_timeout }}"
+    - name: Auf Rückkehr des Containers warten
+      ansible.builtin.wait_for_connection:
+        delay: "{{ maint_reboot_delay }}"
+        timeout: "{{ maint_reboot_timeout }}"
+      when: guest_reboot_via_pve | bool
 
     - name: Gast von innen neu starten
       # Gilt für VMs sowie für LXC, wenn lxc_reboot_via_host deaktiviert ist.
@@ -51,7 +87,7 @@
         reboot_timeout: "{{ maint_reboot_timeout }}"
         post_reboot_delay: "{{ maint_reboot_delay }}"
         msg: "Neustart durch Ansible-Wartung"
-      when: not (pve_type | default('qemu') == 'lxc' and lxc_reboot_via_host | bool)
+      when: not (guest_reboot_via_pve | bool)
 
     - name: Fakten nach dem Neustart neu einlesen
       ansible.builtin.setup:
@@ -71,3 +107,14 @@
           Kernel: {{ ansible_facts.kernel | default('n/a') }}).
           {{ 'ACHTUNG: /var/run/reboot-required besteht weiterhin.'
              if guest_reboot_marker_after.stat.exists else '' }}
+
+- name: Neustart für später einplanen
+  when:
+    - guest_reboot_wanted | bool
+    - maint_reboot_allowed | bool
+    - guest_reboot_when | length > 0
+    - guest_reboot_when != 'now'
+  block:
+
+    - name: Eingeplanten Neustart vorbereiten
+      ansible.builtin.include_tasks: schedule.yml

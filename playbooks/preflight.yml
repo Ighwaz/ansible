@@ -15,6 +15,8 @@
   become: true
   gather_facts: true
   any_errors_fatal: false
+  tags:
+    - preflight
 
   tasks:
     - name: Benötigte Proxmox-Werkzeuge suchen
@@ -87,6 +89,8 @@
   become: true
   gather_facts: true
   any_errors_fatal: false
+  tags:
+    - preflight
 
   tasks:
     - name: Proxmox-Zuordnung testen
@@ -145,6 +149,8 @@
   connection: local
   become: false
   gather_facts: false
+  tags:
+    - preflight
 
   vars:
     preflight_hosts: "{{ (groups['proxmox'] | default([])) + (groups['guests'] | default([])) }}"

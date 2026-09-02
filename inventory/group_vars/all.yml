@@ -37,6 +37,21 @@ ssh_keys_admin: []
 # allerdings ab, statt sich auszusperren.
 ssh_keys_automation: []
 
+# Benutzer, deren authorized_keys verwaltet werden — je Eintrag der Benutzer
+# und die für ihn geltenden Schlüssellisten.
+#
+# Steht hier und nicht nur in der Rolle, weil zwei Playbooks die Liste lesen:
+# ssh-keys.yml schreibt für diese Benutzer, ssh-keys-audit.yml unterscheidet
+# daran, welche gefundenen Schlüssel ein exklusiver Lauf entfernen würde.
+#
+# Das Feld heißt `key_sets` und nicht `keys`: In Jinja löst `eintrag.keys` auf
+# die gleichnamige Methode des Dictionaries auf statt auf das Feld.
+ssh_keys_targets:
+  - user: "{{ ansible_user | default('ansible') }}"
+    key_sets: [admin, automation]
+  - user: root
+    key_sets: [admin]
+
 # authorized_keys vollständig verwalten. Erst dadurch ist ein Widerruf möglich.
 ssh_keys_exclusive: true
 

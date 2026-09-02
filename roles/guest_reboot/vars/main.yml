@@ -1,0 +1,9 @@
+---
+# Markierung in der ersten Zeile jedes von Ansible eingeplanten at-Jobs.
+# Daran erkennt der nächste Lauf seine eigenen Jobs wieder und ersetzt sie,
+# statt einen zweiten Neustart in die Warteschlange zu legen. Von Hand
+# eingeplante Jobs tragen die Markierung nicht und bleiben unangetastet.
+#
+# Steht in vars/ statt defaults/: das ist kein Schalter, sondern ein interner
+# Bezeichner. Ändert man ihn, verlieren bereits eingeplante Jobs den Anschluss.
+guest_reboot_at_marker: "# ansible-maintenance-reboot"

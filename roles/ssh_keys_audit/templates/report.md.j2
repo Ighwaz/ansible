@@ -1,0 +1,137 @@
+# SSH-Schlüssel — Bestandsaufnahme
+
+**Erstellt:** {{ lookup('pipe', 'date -u +"%Y-%m-%d %H:%M:%S UTC"') }}
+**Lauf-ID:** `{{ maint_run_id }}`
+**Erfasste Hosts:** {{ report_hosts | length }}
+{% if ssh_audit_fetch | bool %}
+**Kopien der Dateien:** `{{ ssh_audit_dir }}`
+{% endif %}
+
+{#
+  Die konfigurierten Schlüssel einmal auf ihren Base64-Teil reduzieren. Der
+  ist die eigentliche Identität eines Schlüssels — Optionen davor und
+  Kommentar dahinter dürfen sich unterscheiden, ohne dass es ein anderer
+  Schlüssel wäre.
+#}
+{% set cfg = namespace(admin=[], automation=[]) %}
+{% for k in ssh_keys_admin | default([]) %}
+{%   set b = (k.key | default('')).split() | select('match', 'AAAA') | list | first | default('') %}
+{%   if b %}{% set _ = cfg.admin.append(b) %}{% endif %}
+{% endfor %}
+{% for k in ssh_keys_automation | default([]) %}
+{%   set b = (k.key | default('')).split() | select('match', 'AAAA') | list | first | default('') %}
+{%   if b %}{% set _ = cfg.automation.append(b) %}{% endif %}
+{% endfor %}
+{% set configured = cfg.admin + cfg.automation %}
+
+Konfiguriert sind {{ configured | length }} Schlüssel
+({{ cfg.admin | length }} × `ssh_keys_admin`, {{ cfg.automation | length }} × `ssh_keys_automation`).
+Als "verwaltet" gelten die Benutzer `{{ ssh_audit_managed_users | join('`, `') }}` —
+nur deren `authorized_keys` schreibt `playbooks/ssh-keys.yml`.
+
+## Zusammenfassung
+
+| Host | Benutzer mit Datei | Schlüssel | davon nicht konfiguriert | würde entfernt |
+|------|--------------------|-----------|--------------------------|----------------|
+{% set tot = namespace(keys=0, unknown=0, removed=0) %}
+{% for h in report_hosts %}
+{%   set results = hostvars[h].ssh_audit_raw.results | default([]) %}
+{%   if hostvars[h].ssh_audit_users is not defined %}
+| `{{ h }}` | — | — | — | **nicht erreicht** |
+{%   else %}
+{%     set hs = namespace(files=0, keys=0, unknown=0, removed=0) %}
+{%     for r in results %}
+{%       if r.content is defined %}
+{%         set hs.files = hs.files + 1 %}
+{%         for line in (r.content | b64decode).splitlines() %}
+{%           set toks = line.strip().split() %}
+{%           set body = toks | select('match', 'AAAA') | list | first | default('') %}
+{%           if body and not line.strip().startswith('#') %}
+{%             set hs.keys = hs.keys + 1 %}
+{%             if body not in configured %}
+{%               set hs.unknown = hs.unknown + 1 %}
+{%               if r.item.key in ssh_audit_managed_users %}
+{%                 set hs.removed = hs.removed + 1 %}
+{%               endif %}
+{%             endif %}
+{%           endif %}
+{%         endfor %}
+{%       endif %}
+{%     endfor %}
+{%     set tot.keys = tot.keys + hs.keys %}
+{%     set tot.unknown = tot.unknown + hs.unknown %}
+{%     set tot.removed = tot.removed + hs.removed %}
+| `{{ h }}` | {{ hs.files }} | {{ hs.keys }} | {{ hs.unknown }} | {{ '**' ~ hs.removed ~ '**' if hs.removed > 0 else '0' }} |
+{%   endif %}
+{% endfor %}
+
+**Gesamt:** {{ tot.keys }} Schlüssel, davon {{ tot.unknown }} nicht in der Konfiguration.
+{% if tot.removed > 0 %}
+Ein Lauf von `playbooks/ssh-keys.yml` mit `ssh_keys_exclusive: true` würde davon
+**{{ tot.removed }}** entfernen. Prüfe die Liste unten, bevor du ihn startest —
+was hier fehlt, kommt nicht wieder.
+{% else %}
+Ein Lauf von `playbooks/ssh-keys.yml` mit `ssh_keys_exclusive: true` würde bei
+den verwalteten Benutzern nichts entfernen.
+{% endif %}
+
+## Im Einzelnen
+
+{% for h in report_hosts %}
+### {{ h }}
+
+{% if hostvars[h].ssh_audit_users is not defined %}
+Nicht erreicht — keine Aussage möglich.
+
+{% else %}
+{%   set results = hostvars[h].ssh_audit_raw.results | default([]) %}
+{%   set found = namespace(any=false) %}
+{%   for r in results %}
+{%     if r.content is defined %}
+{%       set lines = (r.content | b64decode).splitlines()
+                     | map('trim') | reject('equalto', '') | reject('match', '#') | list %}
+{%       if lines | length > 0 %}
+{%         set found.any = true %}
+{#
+  Der Base64-Block wird über den ersten Token gefunden, der mit AAAA beginnt.
+  Damit ist die Zeile unabhängig davon zerlegbar, ob ihr Optionen wie
+  `from=` oder `command=` vorangestellt sind. Ein `command="…"` mit
+  Leerzeichen zerfällt dabei in mehrere Token — für die Erkennung des
+  Schlüssels ist das egal, die vollständige Zeile steht in der Kopie unter
+  {{ ssh_audit_dir }}.
+#}
+**`{{ r.item.key }}`** — `{{ r.item.value[4] }}/.ssh/authorized_keys`
+{{ '(verwaltet)' if r.item.key in ssh_audit_managed_users else '(nicht von Ansible verwaltet)' }}
+
+| Typ | Kommentar | Kürzel | Optionen | Status |
+|-----|-----------|--------|----------|--------|
+{%         for line in lines %}
+{%           set toks = line.split() %}
+{%           set body = toks | select('match', 'AAAA') | list | first | default('') %}
+{%           if body %}
+{%             set idx = toks.index(body) %}
+{%             set ktype = toks[idx - 1] if idx > 0 else '?' %}
+{%             set opts = toks[0:idx - 1] | join(' ') if idx > 1 else '' %}
+{%             set comment = toks[idx + 1:] | join(' ') %}
+{%             set known = body in configured %}
+| `{{ ktype }}` | {{ comment | default('—', true) }} | `…{{ body[-12:] }}` | {{ '`' ~ opts ~ '`' if opts else '—' }} | {{ 'konfiguriert' if known else ('**würde entfernt**' if r.item.key in ssh_audit_managed_users else '**unbekannt**') }} |
+{%           else %}
+| ? | — | — | — | nicht als Schlüssel erkannt |
+{%           endif %}
+{%         endfor %}
+
+{%       endif %}
+{%     endif %}
+{%   endfor %}
+{%   if not found.any %}
+Keine `authorized_keys` mit Inhalt gefunden
+({{ hostvars[h].ssh_audit_users | length }} anmeldefähige Benutzer geprüft).
+
+{%   endif %}
+{% endif %}
+{% endfor %}
+
+---
+
+*Erzeugt von `playbooks/ssh-keys-audit.yml`. Die Rolle ändert nichts auf den
+Hosts — sie liest nur.*

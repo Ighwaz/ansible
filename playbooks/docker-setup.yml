@@ -10,6 +10,9 @@
   hosts: docker_hosts
   become: true
   gather_facts: true
+  tags:
+    - docker
+    - setup
   serial: "{{ maint_serial | default(1) }}"
   max_fail_percentage: "{{ maint_max_fail_percentage | default(100) }}"
 

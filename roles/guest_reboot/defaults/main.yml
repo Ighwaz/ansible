@@ -2,6 +2,33 @@
 # Darf dieser Host automatisch neu gestartet werden?
 maint_reboot_allowed: true
 
+# WANN neu gestartet wird. Drei Formen:
+#
+#   "now"          sofort, das Playbook wartet auf die Rückkehr des Hosts
+#   ""             gar nicht — der Bedarf wird nur gemeldet (wie
+#                  maint_reboot_allowed: false, aber pro Lauf statt pro Host)
+#   "03:30"        zu diesem Zeitpunkt, per atd eingeplant. Das Playbook läuft
+#   "now+2hours"   sofort weiter und wartet nicht auf den Neustart.
+#
+# Alles außer "now" und "" geht unverändert an `at`, es gilt also dessen
+# Zeitsyntax (at(1)). Ohne Leerzeichen funktionieren unter anderem:
+# "03:30", "midnight", "teatime", "now+90minutes", "4am+1day".
+#
+#   ansible-playbook playbooks/update.yml -e 'maint_reboot_time=03:30'
+#
+# ACHTUNG bei Zeitangaben MIT Leerzeichen: `-e key=value` zerlegt den Wert an
+# Leerzeichen in mehrere Variablen. Aus
+#     -e "maint_reboot_time=now + 2 hours"
+# wird `maint_reboot_time=now` — und damit ein SOFORTIGER Neustart. Wer
+# Leerzeichen braucht, muss JSON übergeben:
+#     -e '{"maint_reboot_time": "now + 2 hours"}'
+# Am sichersten ist die Schreibweise ohne Leerzeichen.
+maint_reboot_time: "now"
+
+# Neu starten, auch wenn kein Neustart erforderlich scheint. Nützlich, wenn
+# die Erkennung auf einem Host nichts findet, aber ein Dienst hängt.
+maint_reboot_force: false
+
 # Wie lange (Sekunden) auf die Rückkehr des Hosts gewartet wird.
 maint_reboot_timeout: 600
 

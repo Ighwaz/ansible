@@ -9,6 +9,8 @@
   hosts: guests
   become: true
   gather_facts: false
+  tags:
+    - healthcheck
   # Read-only: alle Hosts dürfen parallel laufen.
   max_fail_percentage: "{{ maint_max_fail_percentage | default(100) }}"
 
@@ -34,6 +36,7 @@
       ansible.builtin.include_role:
         name: guest_health
         tasks_from: report.yml
+      tags: [report]
       # Der Report fasst alle Hosts zusammen und wird daher genau einmal
       # erzeugt, nicht je Host.
       run_once: true

@@ -1,0 +1,45 @@
+---
+# ---------------------------------------------------------------------------
+# Bestandsaufnahme der authorized_keys
+# ---------------------------------------------------------------------------
+# Die Rolle ändert nichts. Sie liest auf jedem Host die authorized_keys aller
+# anmeldefähigen Benutzer, legt sie auf dem Controller ab und schreibt einen
+# Report, der jeden gefundenen Schlüssel gegen die konfigurierten Listen
+# (`ssh_keys_admin`, `ssh_keys_automation`) hält.
+#
+# Der Report beantwortet die Frage, die man vor `playbooks/ssh-keys.yml`
+# stellen sollte: Welche Schlüssel liegen heute auf den Hosts, und welche
+# davon würde ein exklusiver Lauf entfernen?
+
+# Shells, deren Benutzer sich nicht anmelden können und daher übersprungen
+# werden. Als Regex an den Shell-Pfad angelegt.
+ssh_audit_ignored_shells: "(nologin|/false|/sync|/shutdown|/halt)$"
+
+# Zusätzlich zu überspringende Benutzer, unabhängig von der Shell.
+ssh_audit_ignored_users: []
+
+# Die gefundenen Dateien unverändert auf dem Controller ablegen.
+# Nützlich als Beleg und für einen späteren Vergleich (diff).
+ssh_audit_fetch: true
+
+# Wohin die Kopien gehen. Je Lauf ein eigenes Verzeichnis, damit sich zwei
+# Bestandsaufnahmen gegenüberstellen lassen.
+ssh_audit_dir: "{{ maint_report_dir }}/authorized_keys/{{ maint_run_id }}"
+
+# Verzeichnis auf dem Controller für den Markdown-Report.
+maint_report_dir: "{{ playbook_dir }}/../reports"
+
+# Report zusätzlich als Datei ablegen (sonst nur Ausgabe im Terminal).
+ssh_audit_write_report: true
+
+# Benutzer, deren authorized_keys von `playbooks/ssh-keys.yml` geschrieben
+# werden. Nur bei ihnen kann ein exklusiver Lauf etwas entfernen — bei allen
+# anderen bleibt ein fremder Schlüssel liegen, weshalb der Report zwischen
+# "würde entfernt" und "unbekannt" unterscheidet.
+#
+# Abgeleitet aus `ssh_keys_targets` (inventory/group_vars/all.yml), damit beide
+# Playbooks dieselbe Liste verwenden.
+ssh_audit_managed_users: >-
+  {{ ssh_keys_targets
+     | default([{'user': ansible_user | default('ansible')}, {'user': 'root'}])
+     | map(attribute='user') | list }}

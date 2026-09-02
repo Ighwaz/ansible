@@ -5,6 +5,7 @@
 #   3. Host- und Service-Definitionen aus dem Inventory
 #
 #   ansible-playbook playbooks/icinga-setup.yml
+#   ansible-playbook playbooks/icinga-setup.yml --tags config
 #
 # Der Monitoring-Host muss Docker haben — vorher playbooks/docker-setup.yml.
 
@@ -16,6 +17,7 @@
 
   roles:
     - role: icinga_server
+      tags: [icinga, server]
 
 - name: Gäste für das Monitoring vorbereiten
   hosts: guests
@@ -32,6 +34,7 @@
 
   roles:
     - role: icinga_remote
+      tags: [icinga, remote]
 
 - name: Prüfungen aus dem Inventory erzeugen
   hosts: monitoring
@@ -41,3 +44,4 @@
 
   roles:
     - role: icinga_config
+      tags: [icinga, config]
