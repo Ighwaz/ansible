@@ -5,9 +5,13 @@
 #   ansible-playbook playbooks/maintenance.yml
 #   ansible-playbook playbooks/maintenance.yml --limit lxc
 #   ansible-playbook playbooks/maintenance.yml --limit ct-docker --check
+#   ansible-playbook playbooks/maintenance.yml --tags update,reboot
+#   ansible-playbook playbooks/maintenance.yml --skip-tags snapshot
+#
+# Hosts in der Gruppe `no_updates` werden übersprungen (siehe inventory/hosts.yml).
 
 - name: Proxmox-Gäste warten
-  hosts: guests
+  hosts: guests:!no_updates
   become: true
   gather_facts: true
 
@@ -27,11 +31,18 @@
       run_once: true
 
   roles:
+    # pve_facts trägt die Tags aller Schritte, die vmid und Node brauchen —
+    # sonst liefe `--tags snapshot` ohne die Zuordnung ins Leere.
     - role: pve_facts
+      tags: [facts, snapshot, reboot]
     - role: pve_snapshot
+      tags: [snapshot]
     - role: guest_update
+      tags: [update]
     - role: guest_reboot
+      tags: [reboot]
     - role: guest_cleanup
+      tags: [cleanup]
 
   post_tasks:
     - name: Wartung abgeschlossen

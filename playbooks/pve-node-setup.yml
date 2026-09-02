@@ -4,6 +4,7 @@
 #
 #   ansible-playbook playbooks/pve-node-setup.yml --check     # erst ansehen
 #   ansible-playbook playbooks/pve-node-setup.yml --limit pve02
+#   ansible-playbook playbooks/pve-node-setup.yml --tags repos,packages
 #
 # Bewusst NICHT enthalten:
 #   - Cluster-Beitritt (`pvecm add`) — ein Fehlgriff dort beschädigt einen
@@ -23,3 +24,4 @@
 
   roles:
     - role: pve_node_setup
+      tags: [pve, setup]

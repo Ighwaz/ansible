@@ -7,7 +7,7 @@
 #   ansible-playbook playbooks/pve-host-update.yml -e pve_manage_repos=true
 
 - name: Proxmox-Hosts aktualisieren
-  hosts: proxmox
+  hosts: proxmox:!no_updates
   become: true
   gather_facts: true
   # Bei mehreren Knoten immer nacheinander, damit nie zwei Hypervisor
@@ -17,3 +17,4 @@
 
   roles:
     - role: pve_host_update
+      tags: [pve, update]

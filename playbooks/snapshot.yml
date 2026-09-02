@@ -19,4 +19,6 @@
 
   roles:
     - role: pve_facts
+      tags: [facts, snapshot]
     - role: pve_snapshot
+      tags: [snapshot]

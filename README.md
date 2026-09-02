@@ -254,6 +254,7 @@ eigene Abschnitte weiter unten. Sinnvolle Reihenfolge:
 | `playbooks/docker-update.yml` | Docker selbst aktualisieren, mit Container-Kontrolle | ja |
 | `playbooks/icinga-setup.yml` | Icinga2-Stack aufsetzen und Gäste vorbereiten | ja |
 | `playbooks/icinga-config.yml` | Prüfungen aus dem Inventory neu erzeugen | ja |
+| `playbooks/ssh-keys-audit.yml` | Vorhandene `authorized_keys` erfassen, Report unter `reports/` | nein |
 | `playbooks/ssh-keys.yml` | SSH-Schlüssel ausrollen, optional sshd härten | ja |
 
 ### Preflight im Detail
@@ -301,7 +302,95 @@ ansible-playbook playbooks/update.yml -e pve_snapshot_enabled=false
 
 # Die Proxmox-Hosts selbst patchen
 ansible-playbook playbooks/pve-host-update.yml
+
+# Tagsüber patchen, nachts um halb vier neu starten
+ansible-playbook playbooks/update.yml -e maint_reboot_time=03:30
+
+# Nur den Update-Schritt, ohne Snapshot und ohne Neustart
+ansible-playbook playbooks/maintenance.yml --tags update
 ```
+
+### Einzelne Schritte über Tags
+
+Die Rollen in den Wartungs-Playbooks sind mit Tags versehen, sodass sich ein
+Lauf auf einen Schritt beschränken lässt:
+
+| Tag | Wirkt auf |
+|---|---|
+| `snapshot` | Snapshot anlegen (inkl. Zuordnung zum PVE-Gast) |
+| `update` | Paket-Updates |
+| `reboot` | Neustart bzw. Einplanen des Neustarts |
+| `cleanup` | Housekeeping |
+| `facts` | nur die Zuordnung vmid/Node ermitteln |
+
+```bash
+ansible-playbook playbooks/maintenance.yml --tags update,reboot
+ansible-playbook playbooks/maintenance.yml --skip-tags snapshot
+ansible-playbook playbooks/maintenance.yml --list-tags     # was gibt es hier?
+```
+
+`pve_facts` trägt absichtlich mehrere Tags (`facts`, `snapshot`, `reboot`):
+ohne die Zuordnung wüsste ein reiner Snapshot-Lauf nicht, welche vmid er
+sichern soll.
+
+`playbooks/pve-node-setup.yml` ist ebenso zerlegt — `repos`, `time`, `locale`,
+`packages`, `subscription`, `vzdump`, `storage`. Die Prüfschritte am Anfang der
+Rolle tragen `always` und laufen immer mit, denn ohne sie fehlt allen anderen
+Schritten die Grundlage.
+
+### Hosts aussparen: die Gruppe `no_updates`
+
+Wer in `inventory/hosts.yml` in der Gruppe `no_updates` steht, wird von
+`update.yml`, `maintenance.yml`, `cleanup.yml` und `pve-host-update.yml`
+übersprungen — diese Playbooks laufen gegen `<gruppe>:!no_updates`.
+
+```yaml
+    no_updates:
+      hosts:
+        ct-db:
+```
+
+Lesende Playbooks (`preflight.yml`, `healthcheck.yml`, `ssh-keys-audit.yml`)
+und `snapshot.yml` ignorieren die Gruppe: hinschauen und sichern darf man
+immer.
+
+Feiner dosieren geht weiterhin am Host selbst:
+
+| Einstellung | Wirkung |
+|---|---|
+| Gruppe `no_updates` | Host wird von allen verändernden Wartungsläufen ausgespart |
+| `maint_reboot_allowed: false` | aktualisieren ja, neu starten nein |
+| `guest_hold_packages: [...]` | einzelne Pakete festhalten, der Rest wird aktualisiert |
+
+### Neustart einplanen statt sofort auslösen
+
+Standardmäßig (`maint_reboot_time: "now"`) startet ein Host, der einen Neustart
+braucht, sofort neu, und das Playbook wartet, bis er wieder da ist. Für die
+Trennung von Patchen und Neustarten gibt es zwei weitere Formen:
+
+```bash
+# Nur melden, nichts neu starten
+ansible-playbook playbooks/update.yml -e maint_reboot_time=
+
+# Um 03:30 über atd neu starten; der Lauf ist danach sofort fertig
+ansible-playbook playbooks/update.yml -e maint_reboot_time=03:30
+
+# Neu starten, obwohl die Erkennung keinen Bedarf sieht
+ansible-playbook playbooks/update.yml -e maint_reboot_force=true
+```
+
+Ein eingeplanter Neustart landet als `at`-Job auf dem Host — bei LXC-Containern
+auf dem PVE-Host als `pct reboot <vmid>`, sonst im Gast als `shutdown -r now`.
+Der Job trägt eine Markierung, an der ein späterer Lauf seinen eigenen Job
+wiedererkennt und ersetzt: zweimal patchen heißt nicht zweimal neu starten.
+Von Hand eingeplante `at`-Jobs bleiben unangetastet.
+
+> **Zeitangaben mit Leerzeichen sind eine Falle.** `-e key=value` zerlegt den
+> Wert an Leerzeichen. Aus `-e "maint_reboot_time=now + 2 hours"` wird
+> `maint_reboot_time=now` — also ein **sofortiger** Neustart. Nimm die
+> Schreibweise ohne Leerzeichen (`now+2hours`, `now+90minutes`, `03:30`,
+> `midnight`, `teatime`, `4am+1day`) oder übergib JSON:
+> `-e '{"maint_reboot_time": "now + 2 hours"}'`.
 
 ## Was die Playbooks für dich mitdenken
 
@@ -552,14 +641,45 @@ ansible-playbook playbooks/ssh-keys.yml
 ```
 
 Ausgerollt wird an den Ansible-Benutzer und an `root`; wer was bekommt, regelt
-`ssh_keys_targets`.
+`ssh_keys_targets` in `inventory/group_vars/all.yml`.
+
+### Vorher hinsehen: was liegt heute auf den Hosts?
+
+```bash
+ansible-playbook playbooks/ssh-keys-audit.yml
+```
+
+Rein lesend. Das Playbook liest auf **allen** Hosts — auch auf den PVE-Hosts —
+die `authorized_keys` aller anmeldefähigen Benutzer, legt die Dateien unter
+`reports/authorized_keys/<lauf-id>/<host>/<benutzer>` ab und schreibt einen
+Report `reports/ssh-keys-<lauf-id>.md`. Der Report führt jeden gefundenen
+Schlüssel mit Typ, Kommentar und Optionen (`from=`, `no-pty`, …) auf und
+ordnet ihn einer von drei Kategorien zu:
+
+| Status | Bedeutung |
+|---|---|
+| `konfiguriert` | steht in `ssh_keys_admin` oder `ssh_keys_automation` |
+| **`würde entfernt`** | unbekannt, und der Benutzer wird von `ssh-keys.yml` verwaltet |
+| **`unbekannt`** | unbekannt, aber bei einem Benutzer, den `ssh-keys.yml` nicht anfasst |
+
+Das ist der Schritt, den man **vor** dem ersten `ssh-keys.yml` machen will:
+Alles, was als *würde entfernt* auftaucht und bleiben soll, gehört vorher nach
+`ssh_keys_admin`. Was als *unbekannt* auftaucht, entfernt kein Playbook — dafür
+gehört es umso mehr angesehen.
+
+Ein zweiter Lauf später lässt sich gegen den ersten stellen:
+
+```bash
+diff -r reports/authorized_keys/<alt> reports/authorized_keys/<neu>
+```
 
 ### Widerruf
 
 Die `authorized_keys` wird **vollständig** verwaltet (`ssh_keys_exclusive`).
 Erst dadurch ist ein Widerruf möglich: Eintrag aus `ssh_keys_admin` entfernen,
 Playbook laufen lassen — der Schlüssel ist flottenweit weg. Von Hand
-hinzugefügte Schlüssel verschwinden damit allerdings ebenfalls.
+hinzugefügte Schlüssel verschwinden damit allerdings ebenfalls; welche das
+wären, zeigt `ssh-keys-audit.yml` vorher an.
 
 ### Schutz gegen das Aussperren
 
@@ -616,6 +736,8 @@ per `-e` auf der Kommandozeile.
 |---|---|---|
 | `maint_serial` | `1` | Wie viele Hosts gleichzeitig gewartet werden |
 | `maint_reboot_allowed` | `true` | Darf der Host automatisch neu starten? |
+| `maint_reboot_time` | `now` | `now` = sofort, `""` = nur melden, sonst `at`-Zeit (z. B. `03:30`) |
+| `maint_reboot_force` | `false` | Neu starten, auch wenn kein Bedarf erkannt wird |
 | `pve_snapshot_enabled` | `true` | Snapshot vor dem Patchen |
 | `pve_snapshot_keep` | `3` | Wie viele Ansible-Snapshots je Gast bleiben |
 | `pve_snapshot_vmstate` | `false` | RAM-Zustand laufender VMs mitsichern |
@@ -636,6 +758,9 @@ lxc:
       guest_hold_packages:
         - postgresql-16
 ```
+
+Ganz aus der Wartung nehmen geht über die Gruppe `no_updates` — siehe
+[Hosts aussparen](#hosts-aussparen-die-gruppe-no_updates).
 
 ## Rollback
 
@@ -714,7 +839,7 @@ roles/
   pve_node_setup            Grundeinrichtung eines neuen Proxmox-Nodes
   pve_host_update           Updates für die PVE-Hosts selbst
   guest_update              Paket-Updates + Reboot-Erkennung
-  guest_reboot              Neustart (LXC über den Host, VMs von innen)
+  guest_reboot              Neustart — sofort oder per atd eingeplant
   guest_cleanup             Paketreste, APT-Cache, Journal, Docker
   guest_health              Lesende Bestandsaufnahme + Report
   docker_install            Docker CE, rootful oder rootless
@@ -723,4 +848,6 @@ roles/
   icinga_remote             Monitoring-Zugang und Plugins auf den Gästen
   icinga_config             Host-/Service-Definitionen aus dem Inventory
   ssh_keys                  Schlüssel ausrollen, optional sshd härten
+  ssh_keys_audit            Vorhandene authorized_keys erfassen (rein lesend)
+reports/                    Health- und Schlüssel-Reports (nicht im Repo)
 ```

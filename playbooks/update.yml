@@ -4,9 +4,12 @@
 #   ansible-playbook playbooks/update.yml
 #   ansible-playbook playbooks/update.yml --limit vms -e guest_upgrade_type=full
 #   ansible-playbook playbooks/update.yml -e pve_snapshot_enabled=false
+#   ansible-playbook playbooks/update.yml -e 'maint_reboot_time=03:30'
+#
+# Hosts in der Gruppe `no_updates` werden übersprungen (siehe inventory/hosts.yml).
 
 - name: Gäste aktualisieren
-  hosts: guests
+  hosts: guests:!no_updates
   become: true
   gather_facts: true
   serial: "{{ maint_serial | default(1) }}"
@@ -20,6 +23,10 @@
 
   roles:
     - role: pve_facts
+      tags: [facts, snapshot, reboot]
     - role: pve_snapshot
+      tags: [snapshot]
     - role: guest_update
+      tags: [update]
     - role: guest_reboot
+      tags: [reboot]

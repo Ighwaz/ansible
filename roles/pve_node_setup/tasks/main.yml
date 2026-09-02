@@ -2,10 +2,14 @@
 # Grundeinrichtung eines Proxmox-Nodes. Fasst bewusst weder Datenträger noch
 # den Cluster an — siehe defaults/main.yml.
 
+# Die vier folgenden Schritte prüfen nur und laufen deshalb bei jedem
+# --tags-Aufruf mit: ohne sie fehlt der Rolle die Grundlage für alles Weitere,
+# und `pve_setup_version` fehlt am Ende der Ergebnismeldung.
 - name: Proxmox VE auf dem Host verifizieren
   ansible.builtin.stat:
     path: /usr/bin/pveversion
   register: pve_setup_binary
+  tags: [always]
 
 - name: Abbruch, wenn kein PVE-Host
   ansible.builtin.assert:
@@ -16,6 +20,7 @@
       (/usr/bin/pveversion fehlt). Steht der Host versehentlich in der
       Gruppe 'proxmox'?
     quiet: true
+  tags: [always]
 
 - name: Nutzbares systemd voraussetzen
   # Die Rolle steuert Zeitzone, chrony und pveproxy über systemd. Fehlt es,
@@ -30,6 +35,7 @@
   failed_when: false
   check_mode: false
   register: pve_setup_systemd
+  tags: [always]
 
 - name: Abbruch bei unbrauchbarem systemd
   ansible.builtin.fail:
@@ -40,6 +46,7 @@
       Diese Rolle setzt ein nutzbares systemd voraus (Zeitzone, chrony,
       pveproxy). Läuft der Host wirklich als Proxmox-Node?
   when: pve_setup_systemd.stdout | default('') | trim not in ['running', 'degraded', 'starting']
+  tags: [always]
 
 - name: Version des Nodes erfassen
   ansible.builtin.command:
@@ -47,6 +54,7 @@
   changed_when: false
   check_mode: false
   register: pve_setup_version
+  tags: [always]
 
 - name: Paketquellen einrichten
   # Wiederverwendung statt Verdopplung: die Unterscheidung zwischen dem
@@ -58,9 +66,11 @@
   vars:
     pve_use_no_subscription_repo: true
   when: pve_setup_manage_repos | bool
+  tags: [repos]
 
 - name: Zeit und Sprache einrichten
   ansible.builtin.include_tasks: locale_time.yml
+  tags: [time, locale]
 
 - name: Basispakete installieren
   ansible.builtin.apt:
@@ -70,18 +80,22 @@
   environment:
     DEBIAN_FRONTEND: noninteractive
   when: pve_setup_base_packages | length > 0
+  tags: [packages]
 
 - name: Abo-Hinweis im Webinterface ausblenden
   ansible.builtin.include_tasks: subscription_notice.yml
   when: pve_setup_hide_subscription_notice | bool
+  tags: [subscription]
 
 - name: Vorgaben für Sicherungen setzen
   ansible.builtin.include_tasks: vzdump.yml
   when: pve_setup_manage_vzdump | bool
+  tags: [vzdump, backup]
 
 - name: Storage abgleichen
   ansible.builtin.include_tasks: storage_check.yml
   when: pve_setup_expected_storages | length > 0
+  tags: [storage]
 
 - name: Ergebnis melden
   ansible.builtin.debug:
@@ -93,3 +107,4 @@
          ~ '), die alte Fassung liegt als Sicherungskopie daneben.'
          if pve_setup_vzdump_conf.changed | default(false) else '' }}
       Cluster-Beitritt und Storage bleiben bewusst manuell.
+  tags: [always]
